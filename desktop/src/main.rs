@@ -497,10 +497,23 @@ impl Render for ChatApp {
             )
             .child(div().flex_1().child(Input::new(&self.input_state)))
             .child(
-                Button::new("send")
-                    .primary()
-                    .label("↑")
-                    .on_click(cx.listener(|this, _, window, cx| this.send_current(window, cx))),
+                // iMessage-style send: blue capsule, bold white up arrow.
+                div()
+                    .id("send")
+                    .cursor_pointer()
+                    .w(px(44.))
+                    .h(px(30.))
+                    .rounded_full()
+                    .bg(rgb(0x0A84FF))
+                    .hover(|d| d.bg(rgb(0x0071E3)))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(rgb(0xFFFFFF))
+                    .text_lg()
+                    .font_bold()
+                    .on_click(cx.listener(|this, _, window, cx| this.send_current(window, cx)))
+                    .child(gpui_kit::assets::IconName::ArrowUp),
             );
 
         v_flex()
