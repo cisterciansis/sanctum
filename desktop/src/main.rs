@@ -38,7 +38,7 @@ impl ChatApp {
         let (ev_tx, ev_rx) = std::sync::mpsc::channel();
         spawn_worker(out_rx, ev_tx);
 
-        let input_state = cx.new(|cx| InputState::new(window, cx).placeholder("iMessage"));
+        let input_state = cx.new(|cx| InputState::new(window, cx));
         let _subscriptions = vec![cx.subscribe_in(&input_state, window, {
             move |this: &mut Self, _, ev: &InputEvent, window, cx| {
                 if let InputEvent::PressEnter { .. } = ev {

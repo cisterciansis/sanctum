@@ -112,10 +112,14 @@ impl App {
         );
 
         f.render_widget(
-            Paragraph::new(self.input.as_str())
-                .block(Block::default().borders(Borders::ALL).title(" iMessage (Enter to send, Esc to quit) ")),
+            Paragraph::new(self.input.as_str()).block(Block::default().borders(Borders::ALL)),
             composer,
         );
+        // Real terminal cursor at the end of the typed text.
+        f.set_cursor_position((
+            composer.x + 1 + self.input.chars().count() as u16,
+            composer.y + 1,
+        ));
     }
 
     fn run(mut self, mut terminal: DefaultTerminal) -> io::Result<()> {
