@@ -133,6 +133,17 @@ impl Store {
         Ok(())
     }
 
+    /// Remove a contact and its entire history.
+    pub fn delete_contact(&self, contact_id: i64) -> Result<(), Error> {
+        self.conn
+            .execute("DELETE FROM messages WHERE contact_id = ?1", rusqlite::params![contact_id])
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+        self.conn
+            .execute("DELETE FROM contacts WHERE id = ?1", rusqlite::params![contact_id])
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+        Ok(())
+    }
+
     pub fn rename_contact(&self, contact_id: i64, name: &str) -> Result<(), Error> {
         self.conn
             .execute("UPDATE contacts SET name = ?1 WHERE id = ?2", rusqlite::params![name, contact_id])

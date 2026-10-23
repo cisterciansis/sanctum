@@ -49,7 +49,7 @@ fn main() {
     assert!(msgs[0].delivered);
     assert_eq!(msgs[0].reaction.as_deref(), Some("❤️"));
 
-    // Cleanup test rows.
-    store.delete_msg(cid, "w1").expect("del msg");
+    // Cleanup everything the test created (contact row included).
+    store.delete_contact(cid).expect("del contact");
     println!("STORETEST OK — encrypted persistence verified");
 }

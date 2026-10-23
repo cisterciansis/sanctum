@@ -39,7 +39,7 @@ impl Msg {
             mine: m.mine,
             delivered: m.delivered,
             reaction: m.reaction,
-            text: if let Some(p) = &m.file_path { format!("📎 {} → {p}", m.text) } else { m.text },
+            text: if let Some(p) = &m.file_path { format!("[file] {} -> {p}", m.text) } else { m.text },
             time: ts.format("%-I:%M %p").to_string(),
             day: ts.format("%A, %b %-d").to_string(),
         }
@@ -184,7 +184,7 @@ impl App {
         let wire_id = ulid::Ulid::new().to_string();
         if let Some(path) = text.strip_prefix("/file ") {
             let path = path.trim().to_string();
-            self.push_own(&wire_id, format!("📎 {path}"));
+            self.push_own(&wire_id, format!("[file] {path}"));
             let _ = self.outbound.send(Cmd::SendFile { contact_id: sel, wire_id, path });
         } else {
             self.push_own(&wire_id, text.clone());
@@ -251,7 +251,7 @@ impl App {
         for (i, c) in self.chats.iter().enumerate() {
             let marker = if i == self.selected { "▸ " } else { "  " };
             let suffix = if c.waiting {
-                " ⏳".to_string()
+                " (pending)".to_string()
             } else if c.unread > 0 {
                 format!(" ({})", c.unread)
             } else {

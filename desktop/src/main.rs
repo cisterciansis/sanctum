@@ -272,12 +272,22 @@ impl ChatApp {
     }
 
     fn sidebar(&mut self, cx: &mut Context<Self>) -> Div {
+        let plus_bar = |top: f32, left: f32, w: f32, h: f32| {
+            div()
+                .absolute()
+                .top(px(top))
+                .left(px(left))
+                .w(px(w))
+                .h(px(h))
+                .rounded_full()
+                .bg(rgb(0x6C6C70))
+        };
         let mut col = v_flex()
-            .w(px(150.))
+            .w(px(172.))
             .h_full()
             .bg(rgb(0xF5F5F7))
             .border_r_1()
-            .border_color(rgb(0xDDDDDD))
+            .border_color(rgb(0xE5E5EA))
             .p_2()
             .gap_1()
             .child(
@@ -285,16 +295,32 @@ impl ChatApp {
                     .w_full()
                     .items_center()
                     .justify_between()
-                    .child(div().text_sm().font_bold().child("Sanctum"))
+                    .px_1()
+                    .pb_1()
                     .child(
-                        Button::new("new-invite").ghost().label("+").on_click(cx.listener(
-                            |this, _, _, _| {
+                        div()
+                            .text_sm()
+                            .font_semibold()
+                            .text_color(rgb(0x1D1D1F))
+                            .child("Sanctum"),
+                    )
+                    .child(
+                        div()
+                            .id("new-invite")
+                            .cursor_pointer()
+                            .w(px(22.))
+                            .h(px(22.))
+                            .rounded_full()
+                            .hover(|d| d.bg(rgb(0xE3E3E8)))
+                            .relative()
+                            .on_click(cx.listener(|this, _, _, _| {
                                 let n = this.chats.len();
                                 let _ = this
                                     .outbound
                                     .send(Cmd::NewInvite { name: format!("Contact {}", n + 1) });
-                            },
-                        )),
+                            }))
+                            .child(plus_bar(10., 6., 10., 2.))
+                            .child(plus_bar(6., 10., 2., 10.)),
                     ),
             );
         if self.chats.is_empty() {
@@ -303,23 +329,45 @@ impl ChatApp {
         }
         for (i, c) in self.chats.iter().enumerate() {
             let selected = i == self.selected;
-            let label: String = if c.waiting {
-                format!("{} ⏳", c.name)
-            } else if c.unread > 0 {
-                format!("{} ({})", c.name, c.unread)
+            // Right side of the row: unread pill, or a soft dot while pending.
+            let trailing: Option<AnyElement> = if c.unread > 0 {
+                Some(
+                    div()
+                        .px_1p5()
+                        .rounded_full()
+                        .text_xs()
+                        .when(selected, |d| d.bg(rgb(0xFFFFFF)).text_color(rgb(BLUE)))
+                        .when(!selected, |d| d.bg(rgb(BLUE)).text_color(rgb(0xFFFFFF)))
+                        .child(format!("{}", c.unread))
+                        .into_any_element(),
+                )
+            } else if c.waiting {
+                Some(
+                    div()
+                        .w(px(7.))
+                        .h(px(7.))
+                        .rounded_full()
+                        .when(selected, |d| d.bg(rgb(0xFFFFFF)))
+                        .when(!selected, |d| d.bg(rgb(0xC7C7CC)))
+                        .into_any_element(),
+                )
             } else {
-                c.name.to_string()
+                None
             };
-            let row = div()
+            let row = h_flex()
                 .id(("chat", i))
                 .cursor_pointer()
                 .w_full()
+                .items_center()
+                .justify_between()
                 .px_2()
-                .py_1()
+                .py_1p5()
                 .rounded_md()
                 .text_sm()
                 .when(selected, |d| d.bg(rgb(BLUE)).text_color(rgb(0xFFFFFF)))
-                .when(!selected, |d| d.hover(|d| d.bg(rgb(0xE8E8ED))))
+                .when(!selected, |d| {
+                    d.text_color(rgb(0x1D1D1F)).hover(|d| d.bg(rgb(0xE8E8ED)))
+                })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.selected = i;
                     this.picker_for = None;
@@ -328,7 +376,8 @@ impl ChatApp {
                     }
                     cx.notify();
                 }))
-                .child(label);
+                .child(c.name.clone())
+                .children(trailing);
             col = col.child(row);
         }
         col
@@ -456,27 +505,58 @@ impl Render for ChatApp {
                 v_flex()
                     .w_full()
                     .gap_2()
-                    .p_3()
-                    .bg(rgb(0xFFF8E1))
+                    .px_3()
+                    .py_3()
+                    .bg(rgb(0xFBFBFD))
                     .border_b_1()
-                    .border_color(rgb(0xEEE0A8))
+                    .border_color(rgb(0xE5E5EA))
                     .child(
                         div()
                             .text_sm()
-                            .child("Waiting for them to join — send this invite link:"),
+                            .font_semibold()
+                            .text_color(rgb(0x1D1D1F))
+                            .child("Invitation pending"),
                     )
+                    .child(div().text_xs().text_color(rgb(GRAY_TXT)).child(
+                        "Share this link. It carries everything they need — no account, no signup.",
+                    ))
                     .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(GRAY_TXT))
-                            .child(format!("{}…", &link[..link.len().min(56)])),
-                    )
-                    .child(
-                        Button::new("copy-invite").outline().label("Copy invite link").on_click(
-                            cx.listener(move |_, _, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(link.clone()));
-                            }),
-                        ),
+                        h_flex()
+                            .w_full()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .bg(rgb(0xF2F2F7))
+                                    .text_xs()
+                                    .text_color(rgb(0x6C6C70))
+                                    .overflow_hidden()
+                                    .child(format!("{}…", &link[..link.len().min(44)])),
+                            )
+                            .child(
+                                div()
+                                    .id("copy-invite")
+                                    .cursor_pointer()
+                                    .px_3()
+                                    .py_1()
+                                    .rounded_md()
+                                    .bg(rgb(0xFFFFFF))
+                                    .border_1()
+                                    .border_color(rgb(0xD1D1D6))
+                                    .hover(|d| d.bg(rgb(0xF5F5F7)))
+                                    .text_sm()
+                                    .text_color(rgb(0x1D1D1F))
+                                    .on_click(cx.listener(move |_, _, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            link.clone(),
+                                        ));
+                                    }))
+                                    .child("Copy"),
+                            ),
                     )
             });
 
@@ -514,7 +594,7 @@ impl Render for ChatApp {
                             .rounded(px(12.))
                             .into_any_element()
                     } else {
-                        div().child(format!("📎 {name}")).into_any_element()
+                        div().font_semibold().child(name.to_string()).into_any_element()
                     }
                 } else {
                     div().child(m.text.clone()).into_any_element()
