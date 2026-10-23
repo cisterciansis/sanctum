@@ -23,6 +23,9 @@ struct Msg {
     delivered: bool,
     reaction: Option<SharedString>,
     text: SharedString,
+    /// Attachment (display name, local path).
+    file: Option<(SharedString, String)>,
+    created: std::time::Instant,
     time: SharedString,
     day: String,
 }
@@ -37,10 +40,24 @@ impl Msg {
             delivered: false,
             reaction: None,
             text: text.into(),
+            file: None,
+            created: std::time::Instant::now(),
             time: now.format("%-I:%M %p").to_string().into(),
             day: now.format("%A, %b %-d").to_string(),
         }
     }
+
+    fn with_file(mut self, name: String, path: String) -> Self {
+        self.file = Some((name.into(), path));
+        self
+    }
+}
+
+fn is_image(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    ["png", "jpg", "jpeg", "gif", "webp", "bmp"]
+        .iter()
+        .any(|e| lower.ends_with(&format!(".{e}")))
 }
 
 struct ChatApp {
@@ -113,6 +130,13 @@ impl ChatApp {
                 Event::Received { wire_id, text } => {
                     self.msgs.push(Msg::now(u64::MAX, wire_id, false, text))
                 }
+                Event::ReceivedFile { wire_id, name, path } => self
+                    .msgs
+                    .push(Msg::now(u64::MAX, wire_id, false, String::new()).with_file(name, path)),
+                Event::TimerChanged(secs) => {
+                    self.settings.disappear_secs = secs;
+                    self.settings.save();
+                }
                 Event::Reaction { ref_id, emoji } => {
                     if let Some(m) =
                         self.msgs.iter_mut().find(|m| !m.wire_id.is_empty() && m.wire_id == ref_id)
@@ -129,9 +153,51 @@ impl ChatApp {
                 Event::Error(e) => self.status = format!("error: {e}").into(),
             }
         }
+        // Disappearing messages: purely local timed deletion (the drop copy
+        // was already deleted at pickup).
+        let secs = self.settings.disappear_secs;
+        if secs > 0 {
+            let before = self.msgs.len();
+            self.msgs.retain(|m| m.created.elapsed().as_secs() < secs);
+            if self.msgs.len() != before {
+                changed = true;
+            }
+        }
         if changed {
             cx.notify();
         }
+    }
+
+    fn attach_file(&mut self, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: None,
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = paths.await {
+                if let Some(path) = paths.first() {
+                    let path = path.to_string_lossy().into_owned();
+                    let _ = this.update(cx, |this, cx| {
+                        let name = std::path::Path::new(&path)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| "file".into());
+                        let id = this.next_id;
+                        this.next_id += 1;
+                        let wire_id = ulid::Ulid::new().to_string();
+                        this.msgs.push(
+                            Msg::now(id, wire_id.clone(), true, String::new())
+                                .with_file(name, path.clone()),
+                        );
+                        let _ = this.outbound.send(Cmd::SendFile { id, wire_id, path });
+                        cx.notify();
+                    });
+                }
+            }
+        })
+        .detach();
     }
 
     fn send_current(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -221,6 +287,36 @@ impl Render for ChatApp {
                         ),
                     )
                     .child(
+                        row(
+                            "Disappearing messages",
+                            Some("timed local deletion, synced to your contact"),
+                        )
+                        .child(
+                            Button::new("set-disappear")
+                                .outline()
+                                .label(match self.settings.disappear_secs {
+                                    0 => "Off",
+                                    60 => "1 min",
+                                    3600 => "1 hour",
+                                    _ => "1 day",
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.settings.disappear_secs =
+                                        match this.settings.disappear_secs {
+                                            0 => 60,
+                                            60 => 3600,
+                                            3600 => 86400,
+                                            _ => 0,
+                                        };
+                                    this.settings.save();
+                                    let _ = this
+                                        .outbound
+                                        .send(Cmd::SetTimer(this.settings.disappear_secs));
+                                    cx.notify();
+                                })),
+                        ),
+                    )
+                    .child(
                         row("Typing indicators", Some("coming soon · off keeps traffic quiet"))
                             .child(Switch::new("set-typing").checked(false).disabled(true)),
                     ),
@@ -272,6 +368,20 @@ impl Render for ChatApp {
                 caption.push("click bubble to unsend".into());
             }
 
+            // Attachment bubbles: inline image, or a file chip.
+            let content: AnyElement = if let Some((name, path)) = &m.file {
+                if is_image(name) {
+                    img(std::path::PathBuf::from(path))
+                        .max_w(px(240.))
+                        .rounded(px(12.))
+                        .into_any_element()
+                } else {
+                    div().child(format!("📎 {name}")).into_any_element()
+                }
+            } else {
+                div().child(m.text.clone()).into_any_element()
+            };
+
             let id = m.id;
             let reactable = !m.mine && !m.wire_id.is_empty();
             let wire_id = m.wire_id.clone();
@@ -281,7 +391,7 @@ impl Render for ChatApp {
                     .on_click(cx.listener(move |this, _, _, _| {
                         let _ = this.outbound.send(Cmd::Unsend(id));
                     }))
-                    .child(m.text.clone())
+                    .child(content)
                     .into_any_element()
             } else if reactable {
                 // Click a received bubble to tapback a heart.
@@ -297,10 +407,10 @@ impl Render for ChatApp {
                         }
                         cx.notify();
                     }))
-                    .child(m.text.clone())
+                    .child(content)
                     .into_any_element()
             } else {
-                bubble.child(m.text.clone()).into_any_element()
+                bubble.child(content).into_any_element()
             };
 
             let mut row = h_flex().items_end().gap_1();
@@ -343,6 +453,12 @@ impl Render for ChatApp {
             .p_3()
             .border_t_1()
             .border_color(rgb(0xDDDDDD))
+            .child(
+                Button::new("attach")
+                    .ghost()
+                    .label("📎")
+                    .on_click(cx.listener(|this, _, _, cx| this.attach_file(cx))),
+            )
             .child(div().flex_1().child(Input::new(&self.input_state)))
             .child(
                 Button::new("send")

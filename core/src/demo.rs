@@ -101,6 +101,51 @@ impl Session {
         Ok(())
     }
 
+    /// Tell the peer the disappearing-messages timer changed (0 = off).
+    pub fn set_timer(&self, secs: u64) -> Result<(), String> {
+        self.deposit(&serde_json::json!({ "t": "tmr", "s": secs }))?;
+        Ok(())
+    }
+
+    /// Send a file: the blob is sealed exactly like a message (same E2E
+    /// envelope) and parked under att/; the chat message carries its pointer.
+    /// Returns the message object key (receipts track the message).
+    /// // ceiling: whole file in memory, 25 MB cap; chunking when needed.
+    pub fn send_file(&self, wire_id: &str, path: &str) -> Result<(String, String), String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("read {path}: {e}"))?;
+        if bytes.len() > 25 * 1024 * 1024 {
+            return Err("file larger than 25 MB".into());
+        }
+        let name = std::path::Path::new(path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "file".into());
+        let pk = self.peer_pk.as_ref().ok_or("not paired yet")?;
+        let sealed = seal(&self.me, pk, &bytes).map_err(|e| e.to_string())?;
+        let att_key = format!("att/{}", ulid::Ulid::new());
+        self.mbox.put(&att_key, &sealed).map_err(|e| e.to_string())?;
+        let msg_key = self
+            .deposit(&serde_json::json!({ "t": "a", "id": wire_id, "n": name, "k": att_key }))?;
+        Ok((msg_key, name))
+    }
+
+    /// Fetch + decrypt an attachment into ~/.sanctum/files/, then remove it
+    /// from the drop. Returns the local path.
+    pub fn fetch_attachment(&self, att_key: &str, name: &str) -> Result<String, String> {
+        let raw = self.mbox.get(att_key).map_err(|e| e.to_string())?;
+        let (_, bytes) = open(&self.me, &raw).map_err(|e| e.to_string())?;
+        let dir = std::env::var("HOME")
+            .map(|h| format!("{h}/.sanctum/files"))
+            .map_err(|_| "no HOME".to_string())?;
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        // Prefix with a ulid so a hostile filename can't overwrite anything.
+        let safe = name.replace(['/', '\\'], "_");
+        let path = format!("{dir}/{}-{safe}", ulid::Ulid::new());
+        std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+        let _ = self.mbox.delete(att_key);
+        Ok(path)
+    }
+
     /// Delivery check for a key this side deposited: the recipient deletes
     /// after decrypt, so absence = delivered to their device.
     pub fn is_delivered(&self, key: &str) -> Result<bool, String> {
@@ -134,7 +179,9 @@ impl Session {
 /// back to a plain message with an empty id.
 pub enum Incoming {
     Message { id: String, text: String },
+    Attachment { id: String, name: String, att_key: String },
     Reaction { ref_id: String, emoji: String },
+    Timer { secs: u64 },
 }
 
 impl Incoming {
@@ -144,7 +191,15 @@ impl Incoming {
             let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string();
             match v.get("t").and_then(|t| t.as_str()) {
                 Some("m") => return Incoming::Message { id: s("id"), text: s("x") },
+                Some("a") => {
+                    return Incoming::Attachment { id: s("id"), name: s("n"), att_key: s("k") }
+                }
                 Some("r") => return Incoming::Reaction { ref_id: s("ref"), emoji: s("e") },
+                Some("tmr") => {
+                    return Incoming::Timer {
+                        secs: v.get("s").and_then(|x| x.as_u64()).unwrap_or(0),
+                    }
+                }
                 _ => {}
             }
         }
@@ -165,6 +220,15 @@ pub struct Settings {
     /// Not implemented yet; reserved so the toggle can ship in the UI.
     #[serde(default)]
     pub typing_indicators: bool,
+    /// Disappearing messages: delete from local view this many seconds after
+    /// they appear (0 = off). Synced to the peer as a control message.
+    #[serde(default)]
+    pub disappear_secs: u64,
+    /// Optional Hippius management-API token (console → Settings). Purely
+    /// opt-in: without it the app works as-is; with it the client can mint
+    /// per-contact buckets/sub-tokens and rotate queues.
+    #[serde(default)]
+    pub hippius_api_token: Option<String>,
 }
 
 fn default_proxy_url() -> String {
@@ -178,6 +242,8 @@ impl Default for Settings {
             proxy_enabled: false,
             proxy_url: default_proxy_url(),
             typing_indicators: false,
+            disappear_secs: 0,
+            hippius_api_token: None,
         }
     }
 }
@@ -208,7 +274,10 @@ impl Settings {
 /// `wire_id` names the message across devices (reaction/edit references).
 pub enum Cmd {
     Send { id: u64, wire_id: String, text: String },
+    SendFile { id: u64, wire_id: String, path: String },
     React { ref_id: String, emoji: String },
+    /// Sync the disappearing-messages timer to the peer (0 = off).
+    SetTimer(u64),
     /// Delete the message from the drop if the peer hasn't fetched it yet.
     Unsend(u64),
 }
@@ -219,7 +288,11 @@ pub enum Cmd {
 pub enum Event {
     Paired,
     Received { wire_id: String, text: String },
+    /// A file arrived and was decrypted to `path`.
+    ReceivedFile { wire_id: String, name: String, path: String },
     Reaction { ref_id: String, emoji: String },
+    /// Peer changed the disappearing-messages timer (0 = off).
+    TimerChanged(u64),
     Delivered(u64),
     Unsent(u64),
     Error(String),
@@ -252,8 +325,19 @@ pub fn spawn_worker(outbound: Receiver<Cmd>, events: Sender<Event>) {
                             let _ = events.send(Event::Error(e));
                         }
                     },
+                    Cmd::SendFile { id, wire_id, path } => match session.send_file(&wire_id, &path) {
+                        Ok((key, _)) => pending.push((id, key, false)),
+                        Err(e) => {
+                            let _ = events.send(Event::Error(e));
+                        }
+                    },
                     Cmd::React { ref_id, emoji } => {
                         if let Err(e) = session.react(&ref_id, &emoji) {
+                            let _ = events.send(Event::Error(e));
+                        }
+                    }
+                    Cmd::SetTimer(secs) => {
+                        if let Err(e) = session.set_timer(secs) {
                             let _ = events.send(Event::Error(e));
                         }
                     }
@@ -276,10 +360,18 @@ pub fn spawn_worker(outbound: Receiver<Cmd>, events: Sender<Event>) {
             }
             if paired {
                 for item in session.poll() {
-                    let _ = events.send(match item {
+                    let ev = match item {
                         Incoming::Message { id, text } => Event::Received { wire_id: id, text },
+                        Incoming::Attachment { id, name, att_key } => {
+                            match session.fetch_attachment(&att_key, &name) {
+                                Ok(path) => Event::ReceivedFile { wire_id: id, name, path },
+                                Err(e) => Event::Error(format!("attachment {name}: {e}")),
+                            }
+                        }
                         Incoming::Reaction { ref_id, emoji } => Event::Reaction { ref_id, emoji },
-                    });
+                        Incoming::Timer { secs } => Event::TimerChanged(secs),
+                    };
+                    let _ = events.send(ev);
                 }
             }
             pending.retain_mut(|(id, key, seen)| match session.is_delivered(key) {

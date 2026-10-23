@@ -87,5 +87,28 @@ fn main() {
         assert!(t.elapsed().as_secs() < 30, "reaction timed out");
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
+    // Attachment round-trip: seal, park under att/, pointer message, fetch.
+    let tmp = std::env::temp_dir().join("sanctum-att-test.bin");
+    let payload: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
+    std::fs::write(&tmp, &payload).expect("write temp file");
+    alice
+        .send_file("w-alice-att", tmp.to_str().unwrap())
+        .expect("send file");
+    let t = std::time::Instant::now();
+    loop {
+        let got = bob.poll();
+        if let Some(Incoming::Attachment { id, name, att_key }) =
+            got.into_iter().find(|i| matches!(i, Incoming::Attachment { .. }))
+        {
+            assert_eq!(id, "w-alice-att");
+            let path = bob.fetch_attachment(&att_key, &name).expect("fetch attachment");
+            let back = std::fs::read(&path).expect("read fetched");
+            assert_eq!(back, payload, "attachment bytes must survive the trip");
+            println!("attachment round-trip (4 KB) in {:.1}s -> {path}", t.elapsed().as_secs_f32());
+            break;
+        }
+        assert!(t.elapsed().as_secs() < 30, "attachment timed out");
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
     println!("PAIRTEST OK");
 }

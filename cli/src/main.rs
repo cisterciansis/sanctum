@@ -12,13 +12,16 @@ fn main() {
         "send" => send(&args),
         "recv" => recv(&args),
         "demo" => demo(),
+        "provision-test" => provision_test(),
         _ => {
             eprintln!(
                 "usage: sanctum <command>\n\
                  \x20 keygen                          print a new identity (secret b64)\n\
                  \x20 send <invite-link> <sender-secret-b64> <text>\n\
                  \x20 recv <recipient-secret-b64> <bucket> <access-key> <secret>\n\
-                 \x20 demo                            live round-trip (env: see experiment/hippius.env)"
+                 \x20 demo                            live round-trip (env: see experiment/hippius.env)\n\
+                 \x20 provision-test                  mint+verify+retire a bucket and sub-token\n\
+                 \x20                                 (needs hippius_api_token in ~/.sanctum/settings.json)"
             );
             Ok(())
         }
@@ -72,6 +75,34 @@ fn recv(args: &[String]) -> Result<(), String> {
             Err(e) => eprintln!("[{key}] undecryptable ({e}) — left in place"),
         }
     }
+    Ok(())
+}
+
+/// With a management-API token configured, prove the full per-contact
+/// provisioning loop: mint bucket -> mint scoped sub-token -> write/read
+/// through it -> retire the bucket. This is the machinery behind contact
+/// invites and queue rotation.
+fn provision_test() -> Result<(), String> {
+    let p = sanctum_core::provision::Provisioner::from_settings()
+        .ok_or("no hippius_api_token in ~/.sanctum/settings.json")?;
+    let bucket = format!("sanctum-ptest-{}", ulid::Ulid::new().to_string().to_lowercase());
+    println!("1. creating bucket {bucket}…");
+    p.create_bucket(&bucket).map_err(|e| e.to_string())?;
+    println!("2. minting sub-token scoped to it…");
+    let (key, secret) = p.create_sub_token(&bucket, "ptest").map_err(|e| e.to_string())?;
+    println!("   got key {}…", &key[..key.len().min(12)]);
+    println!("3. writing+reading through the sub-token…");
+    let mbox = Mailbox::new(sanctum_core::transport::DEFAULT_ENDPOINT, &bucket, &key, &secret)
+        .map_err(|e| e.to_string())?;
+    mbox.put("probe", b"ok").map_err(|e| e.to_string())?;
+    let back = mbox.get("probe").map_err(|e| e.to_string())?;
+    if back != b"ok" {
+        return Err("probe readback mismatch".into());
+    }
+    mbox.delete("probe").map_err(|e| e.to_string())?;
+    println!("4. retiring bucket…");
+    p.delete_bucket(&bucket).map_err(|e| e.to_string())?;
+    println!("PROVISION-TEST OK — per-contact buckets & rotation are unlocked");
     Ok(())
 }
 

@@ -24,6 +24,7 @@ struct Msg {
     delivered: bool,
     reaction: Option<String>,
     text: String,
+    created: std::time::Instant,
     time: String,
     day: String,
 }
@@ -38,6 +39,7 @@ impl Msg {
             delivered: false,
             reaction: None,
             text,
+            created: std::time::Instant::now(),
             time: now.format("%-I:%M %p").to_string(),
             day: now.format("%A, %b %-d").to_string(),
         }
@@ -88,6 +90,16 @@ impl App {
                 Event::Received { wire_id, text } => {
                     self.msgs.push(Msg::now(u64::MAX, wire_id, false, text))
                 }
+                Event::ReceivedFile { wire_id, name, path } => self.msgs.push(Msg::now(
+                    u64::MAX,
+                    wire_id,
+                    false,
+                    format!("\u{1F4CE} {name} \u{2192} {path}"),
+                )),
+                Event::TimerChanged(secs) => {
+                    self.settings.disappear_secs = secs;
+                    self.settings.save();
+                }
                 Event::Reaction { ref_id, emoji } => {
                     if let Some(m) =
                         self.msgs.iter_mut().find(|m| !m.wire_id.is_empty() && m.wire_id == ref_id)
@@ -104,6 +116,10 @@ impl App {
                 Event::Error(e) => self.status = format!("error: {e}"),
             }
         }
+        let secs = self.settings.disappear_secs;
+        if secs > 0 {
+            self.msgs.retain(|m| m.created.elapsed().as_secs() < secs);
+        }
     }
 
     fn send_current(&mut self) {
@@ -114,8 +130,15 @@ impl App {
         let id = self.next_id;
         self.next_id += 1;
         let wire_id = ulid::Ulid::new().to_string();
-        self.msgs.push(Msg::now(id, wire_id.clone(), true, text.clone()));
-        let _ = self.outbound.send(Cmd::Send { id, wire_id, text });
+        if let Some(path) = text.strip_prefix("/file ") {
+            let path = path.trim().to_string();
+            self.msgs
+                .push(Msg::now(id, wire_id.clone(), true, format!("\u{1F4CE} {path}")));
+            let _ = self.outbound.send(Cmd::SendFile { id, wire_id, path });
+        } else {
+            self.msgs.push(Msg::now(id, wire_id.clone(), true, text.clone()));
+            let _ = self.outbound.send(Cmd::Send { id, wire_id, text });
+        }
         self.input.clear();
     }
 
@@ -146,7 +169,7 @@ impl App {
         ])
         .areas(f.area());
 
-        let hint = "enter send · ^R react · ^U unsend · ^S settings · esc quit";
+        let hint = "/file <path> attach · enter send · ^R react · ^U unsend · ^S settings · esc quit";
         let title = Line::from(vec![
             Span::raw(" "),
             Span::raw(&self.peer).bold(),
@@ -177,13 +200,22 @@ impl App {
                     on(self.settings.proxy_enabled),
                     self.settings.proxy_url
                 )),
+                Line::raw(format!(
+                    "  3 · Disappearing msgs     [{}]",
+                    match self.settings.disappear_secs {
+                        0 => "off",
+                        60 => "1m",
+                        3600 => "1h",
+                        _ => "1d",
+                    }
+                )),
                 Line::from(Span::styled(
-                    "  3 · Typing indicators     coming soon",
+                    "  4 · Typing indicators     coming soon",
                     Style::default().fg(Color::DarkGray),
                 )),
                 Line::raw(""),
                 Line::from(Span::styled(
-                    "  press 1/2 to toggle · esc to close",
+                    "  press 1/2/3 to toggle · esc to close",
                     Style::default().fg(Color::DarkGray),
                 )),
             ];
@@ -276,6 +308,16 @@ impl App {
                             KeyCode::Char('2') => {
                                 self.settings.proxy_enabled = !self.settings.proxy_enabled;
                                 self.settings.save();
+                            }
+                            KeyCode::Char('3') => {
+                                self.settings.disappear_secs = match self.settings.disappear_secs {
+                                    0 => 60,
+                                    60 => 3600,
+                                    3600 => 86400,
+                                    _ => 0,
+                                };
+                                self.settings.save();
+                                let _ = self.outbound.send(Cmd::SetTimer(self.settings.disappear_secs));
                             }
                             _ => {}
                         }

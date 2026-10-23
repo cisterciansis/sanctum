@@ -6,6 +6,7 @@
 
 pub mod demo;
 pub mod invite;
+pub mod provision;
 pub mod transport;
 
 pub use crypto_box;
