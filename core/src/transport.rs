@@ -37,11 +37,15 @@ fn agent_from_env() -> Result<ureq::Agent, Error> {
 }
 
 
-/// Strip query strings (presigned signatures) from error text before logging.
+/// Strip query strings (presigned signatures) from error text before logging,
+/// keeping whatever follows the query (ureq appends ": <kind>" after the URL).
 fn redact(e: impl std::fmt::Display) -> String {
     let s = e.to_string();
     match s.split_once('?') {
-        Some((head, _)) => format!("{head}?<redacted>"),
+        Some((head, rest)) => {
+            let tail = rest.split_once(": ").map(|(_, t)| format!(": {t}")).unwrap_or_default();
+            format!("{head}?<redacted>{tail}")
+        }
         None => s,
     }
 }

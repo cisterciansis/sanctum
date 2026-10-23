@@ -94,7 +94,18 @@ fn provision_test() -> Result<(), String> {
     println!("3. writing+reading through the sub-token…");
     let mbox = Mailbox::new(sanctum_core::transport::DEFAULT_ENDPOINT, &bucket, &key, &secret)
         .map_err(|e| e.to_string())?;
-    mbox.put("probe", b"ok").map_err(|e| e.to_string())?;
+    // Fresh tokens/buckets can take a few seconds to install on the gateway.
+    let t = std::time::Instant::now();
+    loop {
+        match mbox.put("probe", b"ok") {
+            Ok(()) => break,
+            Err(e) if t.elapsed().as_secs() < 30 => {
+                println!("   waiting for propagation ({e})…");
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    }
     let back = mbox.get("probe").map_err(|e| e.to_string())?;
     if back != b"ok" {
         return Err("probe readback mismatch".into());

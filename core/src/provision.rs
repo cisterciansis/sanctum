@@ -55,6 +55,8 @@ impl Provisioner {
                 "name": label,
                 "scope_type": "single_bucket",
                 "bucket_names": [bucket],
+                // Omitting actions yields an empty (deny-all) scope.
+                "actions": ["read", "write"],
             }),
         )?;
         // Field spelling per spec is accessKeyId/secret; accept snake_case too.
