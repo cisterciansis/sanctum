@@ -521,6 +521,11 @@ public protocol ClientProtocol: AnyObject, Sendable {
     func send(contactId: Int64, text: String)  -> String
     
     /**
+     * Send a file from a local path; returns the wire id.
+     */
+    func sendFile(contactId: Int64, path: String)  -> String
+    
+    /**
      * Store the Hippius management token (enables creating invites).
      */
     func setApiToken(token: String) 
@@ -663,6 +668,18 @@ open func send(contactId: Int64, text: String) -> String  {
     uniffi_sanctum_core_fn_method_client_send(self.uniffiClonePointer(),
         FfiConverterInt64.lower(contactId),
         FfiConverterString.lower(text),$0
+    )
+})
+}
+    
+    /**
+     * Send a file from a local path; returns the wire id.
+     */
+open func sendFile(contactId: Int64, path: String) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_send_file(self.uniffiClonePointer(),
+        FfiConverterInt64.lower(contactId),
+        FfiConverterString.lower(path),$0
     )
 })
 }
@@ -1269,6 +1286,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_method_client_send() != 42123) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_send_file() != 38047) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_method_client_set_api_token() != 12940) {

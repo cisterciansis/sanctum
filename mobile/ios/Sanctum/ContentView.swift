@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 let tapbacks = ["👍", "👎", "❤️", "‼️", "❓", "😂"]
 
@@ -252,6 +253,7 @@ struct ChatView: View {
     @State private var draft = ""
     @State private var copied = false
     @State private var sendPulse = 0
+    @State private var photoItem: PhotosPickerItem?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -279,7 +281,27 @@ struct ChatView: View {
                 }
             }
             HStack(spacing: 8) {
-                TextField("", text: $draft, axis: .vertical)
+                PhotosPicker(selection: $photoItem, matching: .images) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 30, height: 30)
+                        .background(Circle().fill(Color(.systemGray5)))
+                }
+                .buttonStyle(PressableStyle())
+                .disabled(chat.waiting)
+                .onChange(of: photoItem) {
+                    guard let item = photoItem else { return }
+                    photoItem = nil
+                    Task {
+                        if let data = try? await item.loadTransferable(type: Data.self) {
+                            await MainActor.run {
+                                model.sendFile(data, suggestedName: "photo.jpg")
+                            }
+                        }
+                    }
+                }
+                TextField("Sanctum", text: $draft, axis: .vertical)
                     .lineLimit(1...4)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
@@ -365,14 +387,7 @@ struct Bubble: View {
         HStack {
             if msg.mine { Spacer(minLength: 60) }
             VStack(alignment: msg.mine ? .trailing : .leading, spacing: 2) {
-                Text(msg.text)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .background(
-                        RoundedRectangle(cornerRadius: 18)
-                            .fill(msg.mine ? Color.accentColor : Color(.systemGray5))
-                    )
-                    .foregroundStyle(msg.mine ? .white : .primary)
+                bubbleContent
                     .contextMenu {
                         if !msg.mine {
                             ControlGroup {
@@ -407,5 +422,34 @@ struct Bubble: View {
             if !msg.mine { Spacer(minLength: 60) }
         }
         .id(msg.id)
+    }
+
+    @ViewBuilder
+    private var bubbleContent: some View {
+        if let path = msg.filePath, let ui = UIImage(contentsOfFile: path) {
+            Image(uiImage: ui)
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: 240, maxHeight: 320)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+        } else if msg.filePath != nil {
+            Label(msg.text, systemImage: "doc")
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(
+                    RoundedRectangle(cornerRadius: 18)
+                        .fill(msg.mine ? Color.accentColor : Color(.systemGray5))
+                )
+                .foregroundStyle(msg.mine ? .white : .primary)
+        } else {
+            Text(msg.text)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(
+                    RoundedRectangle(cornerRadius: 18)
+                        .fill(msg.mine ? Color.accentColor : Color(.systemGray5))
+                )
+                .foregroundStyle(msg.mine ? .white : .primary)
+        }
     }
 }

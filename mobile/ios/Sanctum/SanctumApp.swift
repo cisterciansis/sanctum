@@ -30,6 +30,7 @@ struct MsgVM: Identifiable {
     var delivered: Bool
     var reaction: String?
     let text: String
+    let filePath: String?
     let ts: Date
 }
 
@@ -40,6 +41,7 @@ func toVM(_ m: FfiMsg) -> MsgVM {
         delivered: m.delivered,
         reaction: m.reaction,
         text: m.text,
+        filePath: m.filePath,
         ts: Date(timeIntervalSince1970: Double(m.tsMs) / 1000.0)
     )
 }
@@ -123,7 +125,22 @@ final class AppModel: ObservableObject {
         let wireId = client.send(contactId: sel, text: trimmed)
         chats[i].msgs.append(MsgVM(
             id: wireId, mine: true, delivered: false, reaction: nil,
-            text: trimmed, ts: Date()
+            text: trimmed, filePath: nil, ts: Date()
+        ))
+    }
+
+    func sendFile(_ data: Data, suggestedName: String) {
+        guard let sel = selected, let i = idx(sel) else { return }
+        let dir = FileManager.default.temporaryDirectory
+        let name = suggestedName.isEmpty ? "photo.jpg" : suggestedName
+        let url = dir.appendingPathComponent("\(UUID().uuidString)-\(name)")
+        do {
+            try data.write(to: url)
+        } catch { return }
+        let wireId = client.sendFile(contactId: sel, path: url.path)
+        chats[i].msgs.append(MsgVM(
+            id: wireId, mine: true, delivered: false, reaction: nil,
+            text: name, filePath: url.path, ts: Date()
         ))
     }
 

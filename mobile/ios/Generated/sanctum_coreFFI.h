@@ -312,6 +312,11 @@ void uniffi_sanctum_core_fn_method_client_rename(void*_Nonnull ptr, int64_t cont
 RustBuffer uniffi_sanctum_core_fn_method_client_send(void*_Nonnull ptr, int64_t contact_id, RustBuffer text, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_SEND_FILE
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_SEND_FILE
+RustBuffer uniffi_sanctum_core_fn_method_client_send_file(void*_Nonnull ptr, int64_t contact_id, RustBuffer path, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_SET_API_TOKEN
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_SET_API_TOKEN
 void uniffi_sanctum_core_fn_method_client_set_api_token(void*_Nonnull ptr, RustBuffer token, RustCallStatus *_Nonnull out_status
@@ -663,6 +668,12 @@ uint16_t uniffi_sanctum_core_checksum_method_client_rename(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_SEND
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_SEND
 uint16_t uniffi_sanctum_core_checksum_method_client_send(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_SEND_FILE
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_SEND_FILE
+uint16_t uniffi_sanctum_core_checksum_method_client_send_file(void
     
 );
 #endif

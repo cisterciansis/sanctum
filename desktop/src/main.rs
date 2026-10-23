@@ -158,7 +158,7 @@ impl ChatApp {
         let mode = if settings.theme == "dark" { ThemeMode::Dark } else { ThemeMode::Light };
         Theme::change(mode, Some(window), cx);
 
-        let input_state = cx.new(|cx| InputState::new(window, cx));
+        let input_state = cx.new(|cx| InputState::new(window, cx).placeholder("Sanctum"));
         let rename_state = cx.new(|cx| InputState::new(window, cx));
         let join_state = cx.new(|cx| InputState::new(window, cx).placeholder("sanctum://v2/…"));
         let _subscriptions = vec![cx.subscribe_in(&input_state, window, {

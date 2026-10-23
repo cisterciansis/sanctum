@@ -155,6 +155,17 @@ impl Client {
         wire_id
     }
 
+    /// Send a file from a local path; returns the wire id.
+    pub fn send_file(&self, contact_id: i64, path: String) -> String {
+        let wire_id = ulid::Ulid::new().to_string();
+        let _ = self.outbound.lock().expect("outbound lock").send(Cmd::SendFile {
+            contact_id,
+            wire_id: wire_id.clone(),
+            path,
+        });
+        wire_id
+    }
+
     pub fn accept_invite(&self, link: String, name: String) {
         let _ = self
             .outbound
