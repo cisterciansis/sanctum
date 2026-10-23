@@ -1,14 +1,18 @@
-//! Demo chat session over one shared dead-drop bucket.
+//! Demo chat session over one shared dead-drop bucket, used by the desktop
+//! and TUI clients.
 //!
 //! Pairing: each side publishes its public key at `pk/<role>` and polls for
 //! the peer's. Messages go to `to-<peer>/<ulid>`; each side polls its own
 //! `to-<role>/` prefix and deletes after read. Demo ceiling: one shared
-//! bucket, static keys — the real app mints one bucket per contact
-//! (SPEC-V2 §4b) and upgrades crypto to libsignal.
+//! bucket — the real app mints one bucket per contact (SPEC-V2 §4b).
+
+use std::sync::mpsc::{Receiver, Sender};
+use std::time::Duration;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64, Engine};
-use sanctum_core::crypto_box::PublicKey;
-use sanctum_core::{open, seal, transport::Mailbox, Identity};
+use crypto_box::PublicKey;
+
+use crate::{open, seal, transport::Mailbox, Identity};
 
 pub struct Session {
     pub role: String,
@@ -31,7 +35,7 @@ impl Session {
         let env = |k: &str| std::env::var(k).map_err(|_| format!("missing env {k}"));
         let bucket = std::env::var("SANCTUM_BUCKET").unwrap_or_else(|_| "owner".into());
         let mbox = Mailbox::new(
-            sanctum_core::transport::DEFAULT_ENDPOINT,
+            crate::transport::DEFAULT_ENDPOINT,
             &bucket,
             &env(ak)?,
             &env(sk)?,
@@ -39,7 +43,8 @@ impl Session {
         .map_err(|e| e.to_string())?;
 
         // Persist identity across runs so re-pairing isn't needed.
-        let dir = std::env::var("HOME").map(|h| format!("{h}/.sanctum"))
+        let dir = std::env::var("HOME")
+            .map(|h| format!("{h}/.sanctum"))
             .map_err(|_| "no HOME".to_string())?;
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let key_path = format!("{dir}/demo-{role}.key");
@@ -97,4 +102,42 @@ impl Session {
         }
         out
     }
+}
+
+/// Events the background worker reports to a UI.
+pub enum Event {
+    Paired,
+    Received(String),
+    Error(String),
+}
+
+/// Worker thread: owns the blocking Session; UIs talk to it via channels.
+pub fn spawn_worker(outbound: Receiver<String>, events: Sender<Event>) {
+    std::thread::spawn(move || {
+        let mut session = match Session::from_env() {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = events.send(Event::Error(e));
+                return;
+            }
+        };
+        let mut paired = false;
+        loop {
+            if !paired && session.pair() {
+                paired = true;
+                let _ = events.send(Event::Paired);
+            }
+            while let Ok(text) = outbound.try_recv() {
+                if let Err(e) = session.send(&text) {
+                    let _ = events.send(Event::Error(e));
+                }
+            }
+            if paired {
+                for text in session.poll() {
+                    let _ = events.send(Event::Received(text));
+                }
+            }
+            std::thread::sleep(Duration::from_millis(1500));
+        }
+    });
 }

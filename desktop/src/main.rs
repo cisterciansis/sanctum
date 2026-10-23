@@ -2,9 +2,6 @@
 //! Demo: run two instances, `SANCTUM_ROLE=alice` and `SANCTUM_ROLE=bob`
 //! (creds from experiment/hippius.env); they pair through the drop and chat.
 
-mod chat;
-
-use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
 use gpui_kit::assets::Assets;
@@ -14,47 +11,11 @@ use gpui_kit::component::{
     *,
 };
 use gpui_kit::{prelude::FluentBuilder as _, *};
-
-enum Event {
-    Paired,
-    Received(String),
-    Error(String),
-}
+use sanctum_core::demo::{spawn_worker, Event};
 
 struct Msg {
     mine: bool,
     text: SharedString,
-}
-
-/// Worker thread: owns the blocking Session; UI talks to it via channels.
-fn spawn_worker(outbound: Receiver<String>, events: Sender<Event>) {
-    std::thread::spawn(move || {
-        let mut session = match chat::Session::from_env() {
-            Ok(s) => s,
-            Err(e) => {
-                let _ = events.send(Event::Error(e));
-                return;
-            }
-        };
-        let mut paired = false;
-        loop {
-            if !paired && session.pair() {
-                paired = true;
-                let _ = events.send(Event::Paired);
-            }
-            while let Ok(text) = outbound.try_recv() {
-                if let Err(e) = session.send(&text) {
-                    let _ = events.send(Event::Error(e));
-                }
-            }
-            if paired {
-                for text in session.poll() {
-                    let _ = events.send(Event::Received(text));
-                }
-            }
-            std::thread::sleep(Duration::from_millis(1500));
-        }
-    });
 }
 
 struct ChatApp {
@@ -64,8 +25,8 @@ struct ChatApp {
     status: SharedString,
     msgs: Vec<Msg>,
     input_state: Entity<InputState>,
-    outbound: Sender<String>,
-    events: Receiver<Event>,
+    outbound: std::sync::mpsc::Sender<String>,
+    events: std::sync::mpsc::Receiver<Event>,
     _subscriptions: Vec<Subscription>,
 }
 

@@ -1,13 +1,12 @@
 // Headless check of Session pairing + bidirectional messaging (live Hippius).
-// Run: SANCTUM_* + creds env set, `cargo run -p sanctum-desktop --example pairtest`
-#[path = "../src/chat.rs"]
-mod chat;
+// Run: creds env set, `cargo run -p sanctum-desktop --example pairtest`
+use sanctum_core::demo::Session;
 
 fn main() {
     std::env::set_var("SANCTUM_ROLE", "alice");
-    let mut alice = chat::Session::from_env().expect("alice session");
+    let mut alice = Session::from_env().expect("alice session");
     std::env::set_var("SANCTUM_ROLE", "bob");
-    let mut bob = chat::Session::from_env().expect("bob session");
+    let mut bob = Session::from_env().expect("bob session");
 
     let t0 = std::time::Instant::now();
     loop {
@@ -24,7 +23,7 @@ fn main() {
     alice.send("hi bob — alice").expect("alice send");
     bob.send("hi alice — bob").expect("bob send");
 
-    let wait = |s: &chat::Session, who: &str| {
+    let wait = |s: &Session, who: &str| {
         let t = std::time::Instant::now();
         loop {
             let got = s.poll();

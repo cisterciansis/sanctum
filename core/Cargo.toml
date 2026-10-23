@@ -5,10 +5,13 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-# MVP crypto: X25519 + XSalsa20-Poly1305 (audited RustCrypto).
-# Ceiling: no forward secrecy / PQ. Upgrade path: libsignal PQXDH + double
-# ratchet (git dep on signalapp/libsignal) before beta. Wire format already
-# carries a version byte for the swap.
+# Staged for v2 envelopes: libsignal PQXDH + double ratchet (official Signal
+# crates; git-only, Signal does not publish to crates.io). Needs `protoc`.
+# The v2 session module is not implemented yet; envelopes are v1 below.
+libsignal-protocol = { git = "https://github.com/signalapp/libsignal", tag = "v0.105.4" }
+futures-executor = "0.3"
+# v1 envelopes: X25519 + XSalsa20-Poly1305 (audited RustCrypto). Ceiling: no
+# forward secrecy / PQ; the envelope version byte exists for the v2 swap.
 crypto_box = { version = "0.9", features = ["serde"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 rusty-s3 = "0.8"

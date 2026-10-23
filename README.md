@@ -29,9 +29,15 @@ contact ──E2E-encrypted blob──▶ Hippius dead drop ──poll──▶ 
 |---|---|
 | `core/` | `sanctum-core` — identity, invites, envelopes, Hippius transport (Rust, portable to mobile via FFI) |
 | `cli/` | `sanctum` — keygen / send / recv / live demo |
+| `tui/` | `sanctum-tui` — terminal client (ratatui); runs anywhere, no GUI stack |
+| `desktop/` | `sanctum-desktop` — iMessage-style GUI (gpui-kit, Zed's engine) |
 | `proofs/` | Protocol model + laws + proofs (Bend) |
 | `docs/` | Feasibility research, SPEC (v1 relay design), SPEC-V2 (this dead-drop design), PRD |
 | `experiment/` | The live-gateway experiment that validated the design |
+
+Both clients share the same core session; run two instances (`SANCTUM_ROLE=alice`
+/ `SANCTUM_ROLE=bob`, creds in env) and they pair through the dead drop and chat
+— GUI and TUI interchangeably.
 
 ## Quickstart
 
