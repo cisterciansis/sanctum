@@ -575,6 +575,23 @@ struct InviteBanner: View {
     }
 }
 
+/// iOS relocates the app container on every install, so absolute paths
+/// stored in the database go stale; re-root them against today's container.
+func resolveFile(_ path: String) -> String? {
+    if FileManager.default.fileExists(atPath: path) { return path }
+    let fm = FileManager.default
+    if let r = path.range(of: "/Documents/") {
+        let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0].path
+        let candidate = docs + "/" + String(path[r.upperBound...])
+        if fm.fileExists(atPath: candidate) { return candidate }
+    }
+    if let r = path.range(of: "/.sanctum/") {
+        let candidate = NSHomeDirectory() + "/.sanctum/" + String(path[r.upperBound...])
+        if fm.fileExists(atPath: candidate) { return candidate }
+    }
+    return nil
+}
+
 struct Bubble: View {
     @EnvironmentObject var model: AppModel
     let chatId: Int64
@@ -631,7 +648,8 @@ struct Bubble: View {
 
     @ViewBuilder
     private var bubbleContent: some View {
-        if let path = msg.filePath, let ui = UIImage(contentsOfFile: path) {
+        if let stored = msg.filePath, let path = resolveFile(stored),
+           let ui = UIImage(contentsOfFile: path) {
             Image(uiImage: ui)
                 .resizable()
                 .scaledToFit()
