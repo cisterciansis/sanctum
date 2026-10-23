@@ -49,12 +49,17 @@ impl Provisioner {
     /// Mint a sub-token scoped to exactly one bucket (the invite capability).
     /// Returns (access_key_id, secret).
     pub fn create_sub_token(&self, bucket: &str, label: &str) -> Result<(String, String), Error> {
+        self.create_sub_token_multi(&[bucket], label)
+    }
+
+    /// Mint a sub-token scoped to a set of buckets (a contact's queue pair).
+    pub fn create_sub_token_multi(&self, buckets: &[&str], label: &str) -> Result<(String, String), Error> {
         let v = self.post(
             "/objectstore/sub-tokens/",
             serde_json::json!({
                 "name": label,
-                "scope_type": "single_bucket",
-                "bucket_names": [bucket],
+                "scope_type": if buckets.len() == 1 { "single_bucket" } else { "multi_bucket" },
+                "bucket_names": buckets,
                 // Omitting actions yields an empty (deny-all) scope.
                 "actions": ["read", "write"],
             }),
@@ -70,6 +75,36 @@ impl Provisioner {
         let secret = pick(&["secret", "secretKey", "secret_key"])
             .ok_or_else(|| Error::Encoding("no secret in response".into()))?;
         Ok((key, secret))
+    }
+
+    /// Revoke every active sub-token with the given label (test cleanup and
+    /// queue rotation both retire by label).
+    pub fn revoke_sub_tokens_by_label(&self, label: &str) -> Result<usize, Error> {
+        let resp = self
+            .agent
+            .get(&format!("{API}/objectstore/sub-tokens/?page_size=500"))
+            .set("Authorization", &format!("Token {}", self.token))
+            .call()
+            .map_err(|e| Error::Transport(format!("list sub-tokens: {e}")))?;
+        let v: serde_json::Value =
+            resp.into_json().map_err(|e| Error::Encoding(e.to_string()))?;
+        let items = v
+            .get("results")
+            .and_then(|r| r.as_array())
+            .cloned()
+            .or_else(|| v.as_array().cloned())
+            .unwrap_or_default();
+        let mut n = 0;
+        for it in items {
+            let name = it.get("name").and_then(|x| x.as_str()).unwrap_or_default();
+            let status = it.get("status").and_then(|x| x.as_str()).unwrap_or_default();
+            let id = it.get("id").and_then(|x| x.as_str()).unwrap_or_default();
+            if name == label && status == "active" && !id.is_empty() {
+                self.post(&format!("/objectstore/sub-tokens/{id}/revoke/"), serde_json::json!({}))?;
+                n += 1;
+            }
+        }
+        Ok(n)
     }
 
     /// Delete a bucket (rotation retires the old inbox).

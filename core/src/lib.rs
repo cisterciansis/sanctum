@@ -4,9 +4,11 @@
 //! write into one inbox bucket (a Hippius sub-token scoped to it) plus the
 //! recipient's public key. Senders need no account of any kind.
 
+pub mod contact;
 pub mod demo;
 pub mod invite;
 pub mod provision;
+pub mod store;
 pub mod transport;
 
 pub use crypto_box;

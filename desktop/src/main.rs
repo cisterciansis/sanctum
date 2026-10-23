@@ -487,17 +487,22 @@ impl Render for ChatApp {
             .border_t_1()
             .border_color(rgb(0xDDDDDD))
             .child(
+                // Drawn glyph, not an icon asset: can't fail to render.
                 div()
                     .id("attach")
                     .cursor_pointer()
-                    .text_color(rgb(0x8E8E93))
+                    .w(px(28.))
+                    .h(px(28.))
+                    .rounded_full()
+                    .bg(rgb(0xE9E9EB))
+                    .hover(|d| d.bg(rgb(0xDCDCE0)))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(rgb(0x6C6C70))
                     .text_lg()
                     .on_click(cx.listener(|this, _, _, cx| this.attach_file(cx)))
-                    .child(
-                        Icon::new(gpui_kit::assets::IconName::CirclePlus)
-                            .with_size(px(22.))
-                            .text_color(rgb(0x8E8E93)),
-                    ),
+                    .child("+"),
             )
             .child(div().flex_1().child(Input::new(&self.input_state)))
             .child(
