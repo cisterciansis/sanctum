@@ -448,6 +448,8 @@ impl ChatApp {
                 .text_color(rgb(p.sub))
                 .hover(|d| d.bg(rgb(p.selected)))
                 .on_click(cx.listener(move |this, _, _, cx| {
+                    // The row's own click handler would immediately close it.
+                    cx.stop_propagation();
                     this.chat_menu_for =
                         if this.chat_menu_for == Some(i) { None } else { Some(i) };
                     cx.notify();
