@@ -269,6 +269,9 @@ pub enum Cmd {
     React { contact_id: i64, ref_id: String, emoji: String },
     SetTimer { contact_id: i64, secs: u64 },
     Unsend { contact_id: i64, wire_id: String },
+    /// Remove a chat: retire its buckets (when a provisioning token exists)
+    /// and delete it with its history from the store.
+    DeleteContact { contact_id: i64 },
 }
 
 pub enum Event {
@@ -281,6 +284,7 @@ pub enum Event {
     Reaction { contact_id: i64, ref_id: String, emoji: String },
     TimerChanged { contact_id: i64, secs: u64 },
     Unsent { contact_id: i64, wire_id: String },
+    ContactRemoved { contact_id: i64 },
     Error(String),
 }
 
@@ -304,7 +308,7 @@ pub fn spawn_worker(
                 return;
             }
         };
-        let me = match crate::store::identity() {
+        let me = match store.identity() {
             Ok(i) => i,
             Err(e) => {
                 let _ = events.send(err(e.to_string()));
@@ -460,6 +464,17 @@ fn handle_cmd(
             if let Err(e) = l.session.set_timer(secs) {
                 send_err(e);
             }
+        }
+        Cmd::DeleteContact { contact_id } => {
+            if let Some(pos) = live.iter().position(|l| l.contact.id == contact_id) {
+                let l = live.remove(pos);
+                if let Some(p) = Provisioner::from_settings() {
+                    let _ = p.delete_bucket(&l.contact.bucket_in);
+                    let _ = p.delete_bucket(&l.contact.bucket_out);
+                }
+            }
+            let _ = store.delete_contact(contact_id);
+            let _ = events.send(Event::ContactRemoved { contact_id });
         }
         Cmd::Unsend { contact_id, wire_id } => {
             let Some(l) = live.iter_mut().find(|l| l.contact.id == contact_id) else { return };

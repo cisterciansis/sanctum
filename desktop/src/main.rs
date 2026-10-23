@@ -10,7 +10,7 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     input::{Input, InputEvent, InputState},
     switch::Switch,
-    *,
+    Theme, ThemeMode, *,
 };
 use gpui_kit::{prelude::FluentBuilder as _, *};
 use sanctum_core::contact::{spawn_worker, Cmd, Event};
@@ -18,8 +18,58 @@ use sanctum_core::demo::Settings;
 use sanctum_core::store::StoredMsg;
 
 const REACTIONS: [&str; 6] = ["👍", "👎", "❤️", "‼️", "❓", "😂"];
-const BLUE: u32 = 0x0A84FF;
-const GRAY_TXT: u32 = 0x8E8E93;
+const ACCENTS: [(&str, u32); 6] = [
+    ("Blue", 0x0A84FF),
+    ("Purple", 0xBF5AF2),
+    ("Green", 0x30D158),
+    ("Orange", 0xFF9F0A),
+    ("Pink", 0xFF375F),
+    ("Graphite", 0x6C6C70),
+];
+
+/// Surface palette; kit components follow Theme::change separately.
+struct Pal {
+    bg: u32,
+    surface: u32,
+    border: u32,
+    text: u32,
+    sub: u32,
+    bubble: u32,
+    bubble_text: u32,
+    hover: u32,
+    selected: u32,
+    well: u32,
+}
+
+fn pal(dark: bool) -> Pal {
+    if dark {
+        Pal {
+            bg: 0x1C1C1E,
+            surface: 0x242426,
+            border: 0x3A3A3C,
+            text: 0xF2F2F7,
+            sub: 0x98989D,
+            bubble: 0x3A3A3C,
+            bubble_text: 0xF2F2F7,
+            hover: 0x323234,
+            selected: 0x3A3A3C,
+            well: 0x323234,
+        }
+    } else {
+        Pal {
+            bg: 0xFFFFFF,
+            surface: 0xF5F5F7,
+            border: 0xE5E5EA,
+            text: 0x1D1D1F,
+            sub: 0x8E8E93,
+            bubble: 0xE9E9EB,
+            bubble_text: 0x000000,
+            hover: 0xE8E8ED,
+            selected: 0xE3E3E8,
+            well: 0xF2F2F7,
+        }
+    }
+}
 
 struct Msg {
     wire_id: String,
@@ -82,6 +132,8 @@ struct ChatApp {
     status: SharedString,
     settings: Settings,
     show_settings: bool,
+    show_sidebar: bool,
+    inviting: bool,
     picker_for: Option<usize>,
     input_state: Entity<InputState>,
     outbound: std::sync::mpsc::Sender<Cmd>,
@@ -94,6 +146,10 @@ impl ChatApp {
         let (out_tx, out_rx) = std::sync::mpsc::channel();
         let (ev_tx, ev_rx) = std::sync::mpsc::channel();
         spawn_worker(out_rx, ev_tx);
+
+        let settings = Settings::load();
+        let mode = if settings.theme == "dark" { ThemeMode::Dark } else { ThemeMode::Light };
+        Theme::change(mode, Some(window), cx);
 
         let input_state = cx.new(|cx| InputState::new(window, cx));
         let _subscriptions = vec![cx.subscribe_in(&input_state, window, {
@@ -118,8 +174,10 @@ impl ChatApp {
             chats: Vec::new(),
             selected: 0,
             status: "loading…".into(),
-            settings: Settings::load(),
+            settings,
             show_settings: false,
+            show_sidebar: true,
+            inviting: false,
             picker_for: None,
             input_state,
             outbound: out_tx,
@@ -149,9 +207,10 @@ impl ChatApp {
                             unread: 0,
                         })
                         .collect();
-                    self.status = "end-to-end encrypted · hippius".into();
+                    self.status = "ready".into();
                 }
                 Event::ContactAdded(c) => {
+                    self.inviting = false;
                     self.chats.push(Chat {
                         id: c.id,
                         name: c.name.into(),
@@ -161,6 +220,13 @@ impl ChatApp {
                         unread: 0,
                     });
                     self.selected = self.chats.len() - 1;
+                }
+                Event::ContactRemoved { contact_id } => {
+                    self.chats.retain(|c| c.id != contact_id);
+                    if self.selected >= self.chats.len() {
+                        self.selected = self.chats.len().saturating_sub(1);
+                    }
+                    self.picker_for = None;
                 }
                 Event::PeerJoined { contact_id } => {
                     if let Some(c) = self.chat_by_id(contact_id) {
@@ -200,7 +266,10 @@ impl ChatApp {
                         c.msgs.retain(|m| m.wire_id != wire_id);
                     }
                 }
-                Event::Error(e) => self.status = format!("error: {e}").into(),
+                Event::Error(e) => {
+                    self.inviting = false;
+                    self.status = format!("error: {e}").into();
+                }
             }
         }
         if changed {
@@ -232,6 +301,16 @@ impl ChatApp {
             c.msgs.push(Msg::now(wire_id.clone(), true, text.clone(), None));
         }
         let _ = self.outbound.send(Cmd::Send { contact_id: sel, wire_id, text });
+        cx.notify();
+    }
+
+    fn new_invite(&mut self, cx: &mut Context<Self>) {
+        if self.inviting {
+            return; // minting takes a few seconds; one at a time
+        }
+        self.inviting = true;
+        let n = self.chats.len();
+        let _ = self.outbound.send(Cmd::NewInvite { name: format!("Contact {}", n + 1) });
         cx.notify();
     }
 
@@ -271,23 +350,36 @@ impl ChatApp {
         .detach();
     }
 
-    fn sidebar(&mut self, cx: &mut Context<Self>) -> Div {
-        let plus_bar = |top: f32, left: f32, w: f32, h: f32| {
+    fn plus_glyph(color: u32, cx_size: f32) -> Vec<Div> {
+        let mid = cx_size / 2.;
+        let arm = cx_size * 0.45;
+        vec![
             div()
                 .absolute()
-                .top(px(top))
-                .left(px(left))
-                .w(px(w))
-                .h(px(h))
+                .top(px(mid - 1.))
+                .left(px(mid - arm / 2.))
+                .w(px(arm))
+                .h(px(2.))
                 .rounded_full()
-                .bg(rgb(0x6C6C70))
-        };
+                .bg(rgb(color)),
+            div()
+                .absolute()
+                .top(px(mid - arm / 2.))
+                .left(px(mid - 1.))
+                .w(px(2.))
+                .h(px(arm))
+                .rounded_full()
+                .bg(rgb(color)),
+        ]
+    }
+
+    fn sidebar(&mut self, p: &Pal, accent: u32, cx: &mut Context<Self>) -> Div {
         let mut col = v_flex()
             .w(px(172.))
             .h_full()
-            .bg(rgb(0xF5F5F7))
+            .bg(rgb(p.surface))
             .border_r_1()
-            .border_color(rgb(0xE5E5EA))
+            .border_color(rgb(p.border))
             .p_2()
             .gap_1()
             .child(
@@ -297,13 +389,7 @@ impl ChatApp {
                     .justify_between()
                     .px_1()
                     .pb_1()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_semibold()
-                            .text_color(rgb(0x1D1D1F))
-                            .child("Sanctum"),
-                    )
+                    .child(div().text_sm().font_semibold().text_color(rgb(p.text)).child("Chats"))
                     .child(
                         div()
                             .id("new-invite")
@@ -311,46 +397,31 @@ impl ChatApp {
                             .w(px(22.))
                             .h(px(22.))
                             .rounded_full()
-                            .hover(|d| d.bg(rgb(0xE3E3E8)))
+                            .hover(|d| d.bg(rgb(p.hover)))
                             .relative()
-                            .on_click(cx.listener(|this, _, _, _| {
-                                let n = this.chats.len();
-                                let _ = this
-                                    .outbound
-                                    .send(Cmd::NewInvite { name: format!("Contact {}", n + 1) });
-                            }))
-                            .child(plus_bar(10., 6., 10., 2.))
-                            .child(plus_bar(6., 10., 2., 10.)),
+                            .on_click(cx.listener(|this, _, _, cx| this.new_invite(cx)))
+                            .children(Self::plus_glyph(p.sub, 22.)),
                     ),
             );
-        if self.chats.is_empty() {
+        if self.chats.is_empty() && !self.inviting {
             col = col
-                .child(div().text_xs().text_color(rgb(GRAY_TXT)).child("Press + to invite someone"));
+                .child(div().text_xs().text_color(rgb(p.sub)).child("Press + to invite someone"));
         }
         for (i, c) in self.chats.iter().enumerate() {
             let selected = i == self.selected;
-            // Right side of the row: unread pill, or a soft dot while pending.
             let trailing: Option<AnyElement> = if c.unread > 0 {
                 Some(
                     div()
                         .px_1p5()
                         .rounded_full()
                         .text_xs()
-                        .when(selected, |d| d.bg(rgb(0xFFFFFF)).text_color(rgb(BLUE)))
-                        .when(!selected, |d| d.bg(rgb(BLUE)).text_color(rgb(0xFFFFFF)))
+                        .bg(rgb(accent))
+                        .text_color(rgb(0xFFFFFF))
                         .child(format!("{}", c.unread))
                         .into_any_element(),
                 )
             } else if c.waiting {
-                Some(
-                    div()
-                        .w(px(7.))
-                        .h(px(7.))
-                        .rounded_full()
-                        .when(selected, |d| d.bg(rgb(0xFFFFFF)))
-                        .when(!selected, |d| d.bg(rgb(0xC7C7CC)))
-                        .into_any_element(),
-                )
+                Some(div().w(px(7.)).h(px(7.)).rounded_full().bg(rgb(p.sub)).into_any_element())
             } else {
                 None
             };
@@ -364,10 +435,9 @@ impl ChatApp {
                 .py_1p5()
                 .rounded_md()
                 .text_sm()
-                .when(selected, |d| d.bg(rgb(BLUE)).text_color(rgb(0xFFFFFF)))
-                .when(!selected, |d| {
-                    d.text_color(rgb(0x1D1D1F)).hover(|d| d.bg(rgb(0xE8E8ED)))
-                })
+                .text_color(rgb(p.text))
+                .when(selected, |d| d.bg(rgb(p.selected)))
+                .when(!selected, |d| d.hover(|d| d.bg(rgb(p.hover))))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.selected = i;
                     this.picker_for = None;
@@ -380,18 +450,59 @@ impl ChatApp {
                 .children(trailing);
             col = col.child(row);
         }
+        if self.inviting {
+            col = col.child(
+                div()
+                    .w_full()
+                    .px_2()
+                    .py_1p5()
+                    .text_sm()
+                    .text_color(rgb(p.sub))
+                    .child("Inviting…"),
+            );
+        }
         col
     }
 }
 
 impl Render for ChatApp {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let dark = self.settings.theme == "dark";
+        let p = pal(dark);
+        let accent = self.settings.accent;
         let show_time = self.settings.timestamps;
         let peer_name = self
             .chats
             .get(self.selected)
             .map(|c| c.name.clone())
             .unwrap_or_else(|| "Sanctum".into());
+        let error_line = self.status.starts_with("error").then(|| self.status.clone());
+
+        // Sidebar toggle: two bars suggesting a panel edge.
+        let toggle = div()
+            .id("sidebar-toggle")
+            .cursor_pointer()
+            .w(px(24.))
+            .h(px(24.))
+            .rounded_md()
+            .hover(|d| d.bg(rgb(p.hover)))
+            .relative()
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.show_sidebar = !this.show_sidebar;
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .absolute()
+                    .top(px(6.))
+                    .left(px(5.))
+                    .w(px(14.))
+                    .h(px(12.))
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(rgb(p.sub)),
+            )
+            .child(div().absolute().top(px(6.)).left(px(10.)).w(px(1.)).h(px(12.)).bg(rgb(p.sub)));
 
         let header = h_flex()
             .w_full()
@@ -400,14 +511,18 @@ impl Render for ChatApp {
             .pb_2()
             .px_3()
             .border_b_1()
-            .border_color(rgb(0xDDDDDD))
-            .child(div().w_8())
+            .border_color(rgb(p.border))
+            .child(toggle)
             .child(
                 v_flex()
                     .flex_1()
                     .items_center()
-                    .child(div().text_sm().font_semibold().child(peer_name))
-                    .child(div().text_xs().text_color(rgb(GRAY_TXT)).child(self.status.clone())),
+                    .child(
+                        div().text_sm().font_semibold().text_color(rgb(p.text)).child(peer_name),
+                    )
+                    .children(error_line.map(|e| {
+                        div().text_xs().text_color(rgb(0xFF453A)).child(e)
+                    })),
             )
             .child(
                 Button::new("settings-menu").ghost().label("⋯").on_click(cx.listener(
@@ -420,19 +535,63 @@ impl Render for ChatApp {
 
         let settings_panel = self.show_settings.then(|| {
             let row = |label: &str, hint: Option<&str>| {
-                let mut l = v_flex().flex_1().child(div().text_sm().child(label.to_string()));
+                let mut l = v_flex()
+                    .flex_1()
+                    .child(div().text_sm().text_color(rgb(p.text)).child(label.to_string()));
                 if let Some(h) = hint {
-                    l = l.child(div().text_xs().text_color(rgb(GRAY_TXT)).child(h.to_string()));
+                    l = l.child(div().text_xs().text_color(rgb(p.sub)).child(h.to_string()));
                 }
                 h_flex().w_full().items_center().gap_3().child(l)
             };
+
+            // Accent swatches.
+            let mut swatches = h_flex().gap_2();
+            for (name, color) in ACCENTS {
+                let active = accent == color;
+                swatches = swatches.child(
+                    div()
+                        .id(name)
+                        .cursor_pointer()
+                        .w(px(20.))
+                        .h(px(20.))
+                        .rounded_full()
+                        .bg(rgb(color))
+                        .when(active, |d| d.border_2().border_color(rgb(p.text)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.settings.accent = color;
+                            this.settings.save();
+                            cx.notify();
+                        })),
+                );
+            }
+
             v_flex()
                 .w_full()
                 .gap_3()
                 .p_3()
-                .bg(rgb(0xF5F5F7))
+                .bg(rgb(p.surface))
                 .border_b_1()
-                .border_color(rgb(0xDDDDDD))
+                .border_color(rgb(p.border))
+                .child(
+                    row("Appearance", None).child(
+                        Button::new("set-theme")
+                            .outline()
+                            .label(if dark { "Dark" } else { "Light" })
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                let dark = this.settings.theme != "dark";
+                                this.settings.theme =
+                                    if dark { "dark".into() } else { "light".into() };
+                                this.settings.save();
+                                Theme::change(
+                                    if dark { ThemeMode::Dark } else { ThemeMode::Light },
+                                    Some(window),
+                                    cx,
+                                );
+                                cx.notify();
+                            })),
+                    ),
+                )
+                .child(row("Accent", None).child(swatches))
                 .child(
                     row("Timestamps", None).child(
                         Switch::new("set-ts").checked(self.settings.timestamps).on_click(
@@ -489,13 +648,36 @@ impl Render for ChatApp {
                                 })),
                         ),
                 )
+                .children(self.selected_id().map(|id| {
+                    row("Delete this chat", Some("retires its mailboxes; removes history")).child(
+                        div()
+                            .id("delete-chat")
+                            .cursor_pointer()
+                            .px_3()
+                            .py_1()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(0xFF453A))
+                            .text_sm()
+                            .text_color(rgb(0xFF453A))
+                            .hover(|d| d.bg(rgb(if dark { 0x3A2A2A } else { 0xFFF0F0 })))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let _ = this.outbound.send(Cmd::DeleteContact { contact_id: id });
+                                this.show_settings = false;
+                                cx.notify();
+                            }))
+                            .child("Delete"),
+                    )
+                }))
                 .child(
-                    row("Typing indicators", Some("coming soon · off keeps traffic quiet"))
-                        .child(Switch::new("set-typing").checked(false).disabled(true)),
+                    div()
+                        .pt_1()
+                        .text_xs()
+                        .text_color(rgb(p.sub))
+                        .child("End-to-end encrypted · mailboxes on Hippius (Bittensor SN75) · AGPL-3.0"),
                 )
         });
 
-        // Invite banner for a pending contact.
         let banner = self
             .chats
             .get(self.selected)
@@ -507,17 +689,17 @@ impl Render for ChatApp {
                     .gap_2()
                     .px_3()
                     .py_3()
-                    .bg(rgb(0xFBFBFD))
+                    .bg(rgb(p.surface))
                     .border_b_1()
-                    .border_color(rgb(0xE5E5EA))
+                    .border_color(rgb(p.border))
                     .child(
                         div()
                             .text_sm()
                             .font_semibold()
-                            .text_color(rgb(0x1D1D1F))
+                            .text_color(rgb(p.text))
                             .child("Invitation pending"),
                     )
-                    .child(div().text_xs().text_color(rgb(GRAY_TXT)).child(
+                    .child(div().text_xs().text_color(rgb(p.sub)).child(
                         "Share this link. It carries everything they need — no account, no signup.",
                     ))
                     .child(
@@ -531,9 +713,9 @@ impl Render for ChatApp {
                                     .px_2()
                                     .py_1()
                                     .rounded_md()
-                                    .bg(rgb(0xF2F2F7))
+                                    .bg(rgb(p.well))
                                     .text_xs()
-                                    .text_color(rgb(0x6C6C70))
+                                    .text_color(rgb(p.sub))
                                     .overflow_hidden()
                                     .child(format!("{}…", &link[..link.len().min(44)])),
                             )
@@ -544,12 +726,12 @@ impl Render for ChatApp {
                                     .px_3()
                                     .py_1()
                                     .rounded_md()
-                                    .bg(rgb(0xFFFFFF))
+                                    .bg(rgb(p.bg))
                                     .border_1()
-                                    .border_color(rgb(0xD1D1D6))
-                                    .hover(|d| d.bg(rgb(0xF5F5F7)))
+                                    .border_color(rgb(p.border))
+                                    .hover(|d| d.bg(rgb(p.hover)))
                                     .text_sm()
-                                    .text_color(rgb(0x1D1D1F))
+                                    .text_color(rgb(p.text))
                                     .on_click(cx.listener(move |_, _, _, cx| {
                                         cx.write_to_clipboard(ClipboardItem::new_string(
                                             link.clone(),
@@ -572,7 +754,7 @@ impl Render for ChatApp {
                             .w_full()
                             .text_center()
                             .text_xs()
-                            .text_color(rgb(GRAY_TXT))
+                            .text_color(rgb(p.sub))
                             .py_1()
                             .child(m.day.clone())
                             .into_any_element(),
@@ -582,9 +764,9 @@ impl Render for ChatApp {
                 let bubble =
                     div().max_w(relative(0.72)).px_3().py_1p5().text_sm().rounded(px(18.));
                 let bubble = if m.mine {
-                    bubble.bg(rgb(BLUE)).text_color(rgb(0xFFFFFF))
+                    bubble.bg(rgb(accent)).text_color(rgb(0xFFFFFF))
                 } else {
-                    bubble.bg(rgb(0xE9E9EB)).text_color(rgb(0x000000))
+                    bubble.bg(rgb(p.bubble)).text_color(rgb(p.bubble_text))
                 };
 
                 let content: AnyElement = if let Some((name, path)) = &m.file {
@@ -643,9 +825,9 @@ impl Render for ChatApp {
                         .px_3()
                         .py_1()
                         .rounded_full()
-                        .bg(rgb(0xF2F2F7))
+                        .bg(rgb(p.well))
                         .border_1()
-                        .border_color(rgb(0xDDDDDD));
+                        .border_color(rgb(p.border));
                     for (n, emoji) in REACTIONS.iter().enumerate() {
                         let w = m.wire_id.clone();
                         pill = pill.child(
@@ -691,9 +873,8 @@ impl Render for ChatApp {
                     .children(picker)
                     .child(row);
                 if !caption.is_empty() {
-                    col = col.child(
-                        div().text_xs().text_color(rgb(GRAY_TXT)).child(caption.join(" · ")),
-                    );
+                    col = col
+                        .child(div().text_xs().text_color(rgb(p.sub)).child(caption.join(" · ")));
                 }
                 rows.push(col.into_any_element());
             }
@@ -713,39 +894,19 @@ impl Render for ChatApp {
             .gap_2()
             .p_3()
             .border_t_1()
-            .border_color(rgb(0xDDDDDD))
+            .border_color(rgb(p.border))
             .child(
-                // Drawn glyph, not an icon asset: can't fail to render.
                 div()
                     .id("attach")
                     .cursor_pointer()
                     .w(px(28.))
                     .h(px(28.))
                     .rounded_full()
-                    .bg(rgb(0xE9E9EB))
-                    .hover(|d| d.bg(rgb(0xDCDCE0)))
+                    .bg(rgb(p.bubble))
+                    .hover(|d| d.bg(rgb(p.hover)))
                     .relative()
                     .on_click(cx.listener(|this, _, _, cx| this.attach_file(cx)))
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(13.))
-                            .left(px(8.))
-                            .w(px(12.))
-                            .h(px(2.))
-                            .rounded_full()
-                            .bg(rgb(0x6C6C70)),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(8.))
-                            .left(px(13.))
-                            .w(px(2.))
-                            .h(px(12.))
-                            .rounded_full()
-                            .bg(rgb(0x6C6C70)),
-                    ),
+                    .children(Self::plus_glyph(p.sub, 28.)),
             )
             .child(div().flex_1().child(Input::new(&self.input_state)))
             .child(
@@ -755,8 +916,7 @@ impl Render for ChatApp {
                     .w(px(44.))
                     .h(px(30.))
                     .rounded_full()
-                    .bg(rgb(BLUE))
-                    .hover(|d| d.bg(rgb(0x0071E3)))
+                    .bg(rgb(accent))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -772,14 +932,18 @@ impl Render for ChatApp {
         let main = v_flex()
             .flex_1()
             .h_full()
-            .bg(rgb(0xFFFFFF))
+            .bg(rgb(p.bg))
             .child(header)
             .children(settings_panel)
             .children(banner)
             .child(messages)
             .child(composer);
 
-        h_flex().size_full().child(self.sidebar(cx)).child(main)
+        let mut root = h_flex().size_full();
+        if self.show_sidebar {
+            root = root.child(self.sidebar(&p, accent, cx));
+        }
+        root.child(main)
     }
 }
 

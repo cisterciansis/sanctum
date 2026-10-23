@@ -1,10 +1,12 @@
 // Headless check of the encrypted store + keychain: identity round-trip,
 // contact + message persistence across a reopen.
-use sanctum_core::store::{identity, Contact, Store, StoredMsg};
+use sanctum_core::store::{Contact, Store, StoredMsg};
 
 fn main() {
-    let id1 = identity().expect("identity");
-    let id2 = identity().expect("identity again");
+    let store0 = Store::open().expect("open for identity");
+    let id1 = store0.identity().expect("identity");
+    let id2 = store0.identity().expect("identity again");
+    drop(store0);
     assert_eq!(id1.public().as_bytes(), id2.public().as_bytes(), "identity stable");
 
     let store = Store::open().expect("open store");

@@ -158,6 +158,12 @@ impl App {
                         c.msgs.retain(|m| m.wire_id != wire_id);
                     }
                 }
+                Event::ContactRemoved { contact_id } => {
+                    self.chats.retain(|c| c.id != contact_id);
+                    if self.selected >= self.chats.len() {
+                        self.selected = self.chats.len().saturating_sub(1);
+                    }
+                }
                 Event::Error(e) => self.status = format!("error: {e}"),
             }
         }

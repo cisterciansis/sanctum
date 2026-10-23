@@ -29,19 +29,7 @@ fn keychain_secret(name: &str) -> Result<String, Error> {
     }
 }
 
-/// The user's long-term identity, from the keychain (created on first run).
-pub fn identity() -> Result<Identity, Error> {
-    let entry = keychain("identity")?;
-    match entry.get_password() {
-        Ok(s) => Identity::from_b64(&s),
-        Err(keyring::Error::NoEntry) => {
-            let id = Identity::generate();
-            entry.set_password(&id.to_b64()).map_err(|e| Error::Crypto(e.to_string()))?;
-            Ok(id)
-        }
-        Err(e) => Err(Error::Crypto(e.to_string())),
-    }
-}
+
 
 #[derive(Clone, Debug)]
 pub struct Contact {
@@ -109,10 +97,37 @@ impl Store {
                 delivered INTEGER NOT NULL DEFAULT 0,
                 reaction TEXT
             );
-            CREATE INDEX IF NOT EXISTS idx_messages_contact ON messages(contact_id, ts_ms);",
+            CREATE INDEX IF NOT EXISTS idx_messages_contact ON messages(contact_id, ts_ms);
+            CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);",
         )
         .map_err(|e| Error::Crypto(e.to_string()))?;
         Ok(Self { conn })
+    }
+
+    /// The user's long-term identity, kept inside the encrypted DB so the
+    /// keychain holds exactly one item (the DB key) — one prompt, not two.
+    /// Migrates a legacy keychain-stored identity on first call.
+    pub fn identity(&self) -> Result<Identity, Error> {
+        let existing: Option<String> = self
+            .conn
+            .query_row("SELECT v FROM kv WHERE k = 'identity'", [], |r| r.get(0))
+            .ok();
+        if let Some(s) = existing {
+            return Identity::from_b64(&s);
+        }
+        let id = match keychain("identity").and_then(|e| {
+            e.get_password().map_err(|e| Error::Crypto(e.to_string()))
+        }) {
+            Ok(s) => Identity::from_b64(&s)?, // migrate legacy entry
+            Err(_) => Identity::generate(),
+        };
+        self.conn
+            .execute(
+                "INSERT INTO kv (k, v) VALUES ('identity', ?1)",
+                rusqlite::params![id.to_b64()],
+            )
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+        Ok(id)
     }
 
     pub fn add_contact(&self, c: &Contact) -> Result<i64, Error> {

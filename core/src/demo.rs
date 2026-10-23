@@ -232,6 +232,20 @@ pub struct Settings {
     /// per-contact buckets/sub-tokens and rotate queues.
     #[serde(default)]
     pub hippius_api_token: Option<String>,
+    /// "light" or "dark".
+    #[serde(default = "default_theme")]
+    pub theme: String,
+    /// Accent color for own bubbles / send button, 0xRRGGBB.
+    #[serde(default = "default_accent")]
+    pub accent: u32,
+}
+
+fn default_theme() -> String {
+    "light".into()
+}
+
+fn default_accent() -> u32 {
+    0x0A84FF
 }
 
 fn default_proxy_url() -> String {
@@ -247,6 +261,8 @@ impl Default for Settings {
             typing_indicators: false,
             disappear_secs: 0,
             hippius_api_token: None,
+            theme: default_theme(),
+            accent: default_accent(),
         }
     }
 }
