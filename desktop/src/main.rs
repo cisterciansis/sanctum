@@ -14,7 +14,9 @@ use gpui_kit::{prelude::FluentBuilder as _, *};
 use sanctum_core::demo::{spawn_worker, Event};
 
 struct Msg {
+    id: u64,
     mine: bool,
+    delivered: bool,
     text: SharedString,
 }
 
@@ -23,8 +25,9 @@ struct ChatApp {
     paired: bool,
     status: SharedString,
     msgs: Vec<Msg>,
+    next_id: u64,
     input_state: Entity<InputState>,
-    outbound: std::sync::mpsc::Sender<String>,
+    outbound: std::sync::mpsc::Sender<(u64, String)>,
     events: std::sync::mpsc::Receiver<Event>,
     _subscriptions: Vec<Subscription>,
 }
@@ -64,6 +67,7 @@ impl ChatApp {
             paired: false,
             status: "connecting to Hippius…".into(),
             msgs: Vec::new(),
+            next_id: 0,
             input_state,
             outbound: out_tx,
             events: ev_rx,
@@ -80,7 +84,17 @@ impl ChatApp {
                     self.paired = true;
                     self.status = "end-to-end encrypted · hippius".into();
                 }
-                Event::Received(text) => self.msgs.push(Msg { mine: false, text: text.into() }),
+                Event::Received(text) => self.msgs.push(Msg {
+                    id: u64::MAX,
+                    mine: false,
+                    delivered: false,
+                    text: text.into(),
+                }),
+                Event::Delivered(id) => {
+                    if let Some(m) = self.msgs.iter_mut().find(|m| m.mine && m.id == id) {
+                        m.delivered = true;
+                    }
+                }
                 Event::Error(e) => self.status = format!("error: {e}").into(),
             }
         }
@@ -95,12 +109,15 @@ impl ChatApp {
             return;
         }
         self.input_state.update(cx, |s, cx| s.set_value("", window, cx));
-        self.msgs.push(Msg { mine: true, text: text.clone().into() });
-        let _ = self.outbound.send(text);
+        let id = self.next_id;
+        self.next_id += 1;
+        self.msgs.push(Msg { id, mine: true, delivered: false, text: text.clone().into() });
+        let _ = self.outbound.send((id, text));
         cx.notify();
     }
 
-    fn bubble(msg: &Msg) -> Div {
+    /// `receipt`: show the iMessage-style "Delivered" caption under this bubble.
+    fn bubble(msg: &Msg, receipt: bool) -> Div {
         let bubble = div()
             .max_w(relative(0.72))
             .px_3()
@@ -112,11 +129,21 @@ impl ChatApp {
         } else {
             bubble.bg(rgb(0xE9E9EB)).text_color(rgb(0x000000))
         };
-        h_flex()
+        let mut col = v_flex()
             .w_full()
-            .when(msg.mine, |d| d.justify_end())
-            .when(!msg.mine, |d| d.justify_start())
-            .child(bubble.child(msg.text.clone()))
+            .when(msg.mine, |d| d.items_end())
+            .when(!msg.mine, |d| d.items_start())
+            .child(bubble.child(msg.text.clone()));
+        if receipt {
+            col = col.child(
+                div()
+                    .text_xs()
+                    .font_semibold()
+                    .text_color(rgb(0x8E8E93))
+                    .child("Delivered"),
+            );
+        }
+        col
     }
 }
 
@@ -139,7 +166,17 @@ impl Render for ChatApp {
             .gap_1()
             .p_3()
             .overflow_y_scroll()
-            .children(self.msgs.iter().map(Self::bubble));
+            .children({
+                // iMessage shows the receipt only under the newest delivered own message.
+                let last_delivered = self
+                    .msgs
+                    .iter()
+                    .rposition(|m| m.mine && m.delivered);
+                self.msgs
+                    .iter()
+                    .enumerate()
+                    .map(move |(i, m)| Self::bubble(m, Some(i) == last_delivered))
+            });
 
         let composer = h_flex()
             .w_full()

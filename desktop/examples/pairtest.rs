@@ -20,7 +20,11 @@ fn main() {
     }
     println!("paired in {:.1}s", t0.elapsed().as_secs_f32());
 
-    alice.send("hi bob — alice").expect("alice send");
+    let alice_key = alice.send("hi bob — alice").expect("alice send");
+    assert!(
+        !alice.is_delivered(&alice_key).unwrap_or(true),
+        "must not read as delivered while still in the drop"
+    );
     bob.send("hi alice — bob").expect("bob send");
 
     let wait = |s: &Session, who: &str| {
@@ -36,8 +40,15 @@ fn main() {
         }
     };
     let a = wait(&alice, "alice");
-    let b = wait(&bob, "bob");
     assert_eq!(a, vec!["hi alice — bob".to_string()]);
+    // A bob device fetching+deleting alice's object flips the receipt.
+    let t = std::time::Instant::now();
+    while !alice.is_delivered(&alice_key).expect("receipt check") {
+        assert!(t.elapsed().as_secs() < 15, "receipt timed out");
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    println!("delivery receipt confirmed in {:.1}s", t.elapsed().as_secs_f32());
+    let b = wait(&bob, "bob");
     assert_eq!(b, vec!["hi bob — alice".to_string()]);
     println!("PAIRTEST OK");
 }

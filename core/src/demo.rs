@@ -79,12 +79,19 @@ impl Session {
         self.peer_pk.is_some()
     }
 
-    pub fn send(&self, text: &str) -> Result<(), String> {
+    /// Returns the deposited object key (used for delivery receipts).
+    pub fn send(&self, text: &str) -> Result<String, String> {
         let pk = self.peer_pk.as_ref().ok_or("not paired yet")?;
         let sealed = seal(&self.me, pk, text.as_bytes()).map_err(|e| e.to_string())?;
-        self.mbox
-            .put(&format!("to-{}/{}", self.peer, ulid::Ulid::new()), &sealed)
-            .map_err(|e| e.to_string())
+        let key = format!("to-{}/{}", self.peer, ulid::Ulid::new());
+        self.mbox.put(&key, &sealed).map_err(|e| e.to_string())?;
+        Ok(key)
+    }
+
+    /// Delivery check for a key this side deposited: the recipient deletes
+    /// after decrypt, so absence = delivered to their device.
+    pub fn is_delivered(&self, key: &str) -> Result<bool, String> {
+        Ok(!self.mbox.exists(key).map_err(|e| e.to_string())?)
     }
 
     /// Drain this side's inbox prefix; delete after successful decrypt.
@@ -104,15 +111,18 @@ impl Session {
     }
 }
 
-/// Events the background worker reports to a UI.
+/// Events the background worker reports to a UI. Outbound messages carry a
+/// UI-chosen id; Delivered echoes it back once the peer's device has fetched
+/// and decrypted that message (its drop object is gone).
 pub enum Event {
     Paired,
     Received(String),
+    Delivered(u64),
     Error(String),
 }
 
 /// Worker thread: owns the blocking Session; UIs talk to it via channels.
-pub fn spawn_worker(outbound: Receiver<String>, events: Sender<Event>) {
+pub fn spawn_worker(outbound: Receiver<(u64, String)>, events: Sender<Event>) {
     std::thread::spawn(move || {
         let mut session = match Session::from_env() {
             Ok(s) => s,
@@ -122,14 +132,20 @@ pub fn spawn_worker(outbound: Receiver<String>, events: Sender<Event>) {
             }
         };
         let mut paired = false;
+        // (id, key, seen): a receipt needs presence first, then absence —
+        // otherwise list-lag would read as instant delivery.
+        let mut pending: Vec<(u64, String, bool)> = Vec::new();
         loop {
             if !paired && session.pair() {
                 paired = true;
                 let _ = events.send(Event::Paired);
             }
-            while let Ok(text) = outbound.try_recv() {
-                if let Err(e) = session.send(&text) {
-                    let _ = events.send(Event::Error(e));
+            while let Ok((id, text)) = outbound.try_recv() {
+                match session.send(&text) {
+                    Ok(key) => pending.push((id, key, false)),
+                    Err(e) => {
+                        let _ = events.send(Event::Error(e));
+                    }
                 }
             }
             if paired {
@@ -137,6 +153,17 @@ pub fn spawn_worker(outbound: Receiver<String>, events: Sender<Event>) {
                     let _ = events.send(Event::Received(text));
                 }
             }
+            pending.retain_mut(|(id, key, seen)| match session.is_delivered(key) {
+                Ok(false) => {
+                    *seen = true;
+                    true
+                }
+                Ok(true) if *seen => {
+                    let _ = events.send(Event::Delivered(*id));
+                    false
+                }
+                _ => true,
+            });
             std::thread::sleep(Duration::from_millis(1500));
         }
     });

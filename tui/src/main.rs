@@ -16,7 +16,9 @@ use ratatui::{
 use sanctum_core::demo::{spawn_worker, Event};
 
 struct Msg {
+    id: u64,
     mine: bool,
+    delivered: bool,
     text: String,
 }
 
@@ -25,8 +27,9 @@ struct App {
     status: String,
     paired: bool,
     msgs: Vec<Msg>,
+    next_id: u64,
     input: String,
-    outbound: std::sync::mpsc::Sender<String>,
+    outbound: std::sync::mpsc::Sender<(u64, String)>,
     events: std::sync::mpsc::Receiver<Event>,
 }
 
@@ -42,6 +45,7 @@ impl App {
             status: "connecting to Hippius…".into(),
             paired: false,
             msgs: Vec::new(),
+            next_id: 0,
             input: String::new(),
             outbound: out_tx,
             events: ev_rx,
@@ -55,7 +59,14 @@ impl App {
                     self.paired = true;
                     self.status = "end-to-end encrypted · hippius".into();
                 }
-                Event::Received(text) => self.msgs.push(Msg { mine: false, text }),
+                Event::Received(text) => {
+                    self.msgs.push(Msg { id: u64::MAX, mine: false, delivered: false, text })
+                }
+                Event::Delivered(id) => {
+                    if let Some(m) = self.msgs.iter_mut().find(|m| m.mine && m.id == id) {
+                        m.delivered = true;
+                    }
+                }
                 Event::Error(e) => self.status = format!("error: {e}"),
             }
         }
@@ -66,8 +77,10 @@ impl App {
         if text.is_empty() || !self.paired {
             return;
         }
-        self.msgs.push(Msg { mine: true, text: text.clone() });
-        let _ = self.outbound.send(text);
+        let id = self.next_id;
+        self.next_id += 1;
+        self.msgs.push(Msg { id, mine: true, delivered: false, text: text.clone() });
+        let _ = self.outbound.send((id, text));
         self.input.clear();
     }
 
@@ -97,8 +110,14 @@ impl App {
             };
             let text = format!(" {} ", m.text);
             let line = if m.mine {
-                let pad = width.saturating_sub(text.chars().count());
-                Line::from(vec![Span::raw(" ".repeat(pad)), Span::styled(text, style)])
+                // "✓" outside the bubble once the peer's device has fetched it.
+                let receipt = if m.delivered { " ✓" } else { "" };
+                let pad = width.saturating_sub(text.chars().count() + receipt.chars().count());
+                Line::from(vec![
+                    Span::raw(" ".repeat(pad)),
+                    Span::styled(text, style),
+                    Span::styled(receipt.to_string(), Style::default().fg(Color::Green)),
+                ])
             } else {
                 Line::from(Span::styled(text, style))
             };

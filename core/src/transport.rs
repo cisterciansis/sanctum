@@ -77,6 +77,17 @@ impl Mailbox {
         Ok(buf)
     }
 
+    /// Does the object exist? (HEAD; used for delivery receipts: the
+    /// recipient deletes after decrypt, so absence after presence = delivered.)
+    pub fn exists(&self, key: &str) -> Result<bool, Error> {
+        let url = self.bucket.head_object(Some(&self.creds), key).sign(SIGN_TTL);
+        match self.agent.head(url.as_str()).call() {
+            Ok(_) => Ok(true),
+            Err(ureq::Error::Status(404, _)) => Ok(false),
+            Err(e) => Err(Error::Transport(format!("head {key}: {}", redact(e)))),
+        }
+    }
+
     pub fn delete(&self, key: &str) -> Result<(), Error> {
         let url = self.bucket.delete_object(Some(&self.creds), key).sign(SIGN_TTL);
         self.agent.delete(url.as_str())
