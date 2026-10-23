@@ -493,7 +493,11 @@ impl Render for ChatApp {
                     .text_color(rgb(0x8E8E93))
                     .text_lg()
                     .on_click(cx.listener(|this, _, _, cx| this.attach_file(cx)))
-                    .child(gpui_kit::assets::IconName::CirclePlus),
+                    .child(
+                        Icon::new(gpui_kit::assets::IconName::CirclePlus)
+                            .with_size(px(22.))
+                            .text_color(rgb(0x8E8E93)),
+                    ),
             )
             .child(div().flex_1().child(Input::new(&self.input_state)))
             .child(
@@ -513,7 +517,11 @@ impl Render for ChatApp {
                     .text_lg()
                     .font_bold()
                     .on_click(cx.listener(|this, _, window, cx| this.send_current(window, cx)))
-                    .child(gpui_kit::assets::IconName::ArrowUp),
+                    .child(
+                        Icon::new(gpui_kit::assets::IconName::ArrowUp)
+                            .with_size(px(18.))
+                            .text_color(rgb(0xFFFFFF)),
+                    ),
             );
 
         v_flex()
