@@ -136,6 +136,7 @@ struct ChatApp {
     inviting: bool,
     picker_for: Option<usize>,
     input_state: Entity<InputState>,
+    rename_state: Entity<InputState>,
     outbound: std::sync::mpsc::Sender<Cmd>,
     events: std::sync::mpsc::Receiver<Event>,
     _subscriptions: Vec<Subscription>,
@@ -152,6 +153,7 @@ impl ChatApp {
         Theme::change(mode, Some(window), cx);
 
         let input_state = cx.new(|cx| InputState::new(window, cx));
+        let rename_state = cx.new(|cx| InputState::new(window, cx));
         let _subscriptions = vec![cx.subscribe_in(&input_state, window, {
             move |this: &mut Self, _, ev: &InputEvent, window, cx| {
                 if let InputEvent::PressEnter { .. } = ev {
@@ -180,6 +182,7 @@ impl ChatApp {
             inviting: false,
             picker_for: None,
             input_state,
+            rename_state,
             outbound: out_tx,
             events: ev_rx,
             _subscriptions,
@@ -460,7 +463,12 @@ impl ChatApp {
                     .py_1p5()
                     .text_sm()
                     .text_color(rgb(p.sub))
-                    .child("Inviting…"),
+                    .child("Inviting…")
+                    .with_animation(
+                        "inviting-shimmer",
+                        Animation::new(Duration::from_millis(900)).repeat(),
+                        |d, delta| d.opacity(0.35 + 0.65 * (1.0 - (delta - 0.5).abs() * 2.0)),
+                    ),
             );
         }
         col
@@ -527,8 +535,16 @@ impl Render for ChatApp {
             )
             .child(
                 Button::new("settings-menu").ghost().label("⋯").on_click(cx.listener(
-                    |this, _, _, cx| {
+                    |this, _, window, cx| {
                         this.show_settings = !this.show_settings;
+                        if this.show_settings {
+                            let name = this
+                                .chats
+                                .get(this.selected)
+                                .map(|c| c.name.to_string())
+                                .unwrap_or_default();
+                            this.rename_state.update(cx, |s, cx| s.set_value(&name, window, cx));
+                        }
                         cx.notify();
                     },
                 )),
@@ -650,6 +666,38 @@ impl Render for ChatApp {
                         ),
                 )
                 .children(self.selected_id().map(|id| {
+                    row("Chat name", None)
+                        .child(div().w(px(160.)).child(Input::new(&self.rename_state)))
+                        .child(
+                            div()
+                                .id("rename-save")
+                                .cursor_pointer()
+                                .px_3()
+                                .py_1()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(rgb(p.border))
+                                .hover(|d| d.bg(rgb(p.hover)))
+                                .text_sm()
+                                .text_color(rgb(p.text))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    let name = this.rename_state.read(cx).value().trim().to_string();
+                                    if !name.is_empty() {
+                                        let _ = this
+                                            .outbound
+                                            .send(Cmd::Rename { contact_id: id, name: name.clone() });
+                                        if let Some(c) =
+                                            this.chats.iter_mut().find(|c| c.id == id)
+                                        {
+                                            c.name = name.into();
+                                        }
+                                        cx.notify();
+                                    }
+                                }))
+                                .child("Save"),
+                        )
+                }))
+                .children(self.selected_id().map(|id| {
                     row("Delete this chat", Some("retires its mailboxes; removes history")).child(
                         div()
                             .id("delete-chat")
@@ -675,7 +723,7 @@ impl Render for ChatApp {
                         .pt_1()
                         .text_xs()
                         .text_color(rgb(p.sub))
-                        .child("End-to-end encrypted · mailboxes on Hippius (Bittensor SN75) · AGPL-3.0"),
+                        .child("End-to-end encrypted · mailboxes on Hippius (Bittensor SN75)"),
                 )
         });
 

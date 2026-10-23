@@ -62,6 +62,7 @@ struct App {
     settings: Settings,
     show_settings: bool,
     react_mode: bool,
+    inviting: bool,
     input: String,
     outbound: std::sync::mpsc::Sender<Cmd>,
     events: std::sync::mpsc::Receiver<Event>,
@@ -72,6 +73,12 @@ impl App {
         let (out_tx, out_rx) = std::sync::mpsc::channel();
         let (ev_tx, ev_rx) = std::sync::mpsc::channel();
         spawn_worker(out_rx, ev_tx);
+        // `sanctum-tui <invite-link>`: join straight from the command line.
+        if let Some(link) = std::env::args().nth(1) {
+            if link.starts_with("sanctum://v2/") {
+                let _ = out_tx.send(Cmd::AcceptInvite { link, name: "New contact".into() });
+            }
+        }
         Self {
             chats: Vec::new(),
             selected: 0,
@@ -79,6 +86,7 @@ impl App {
             settings: Settings::load(),
             show_settings: false,
             react_mode: false,
+            inviting: false,
             input: String::new(),
             outbound: out_tx,
             events: ev_rx,
@@ -111,6 +119,7 @@ impl App {
                     self.status = "end-to-end encrypted · hippius".into();
                 }
                 Event::ContactAdded(c) => {
+                    self.inviting = false;
                     self.chats.push(Chat {
                         id: c.id,
                         name: c.name,
@@ -164,7 +173,10 @@ impl App {
                         self.selected = self.chats.len().saturating_sub(1);
                     }
                 }
-                Event::Error(e) => self.status = format!("error: {e}"),
+                Event::Error(e) => {
+                    self.inviting = false;
+                    self.status = format!("error: {e}");
+                }
             }
         }
     }
@@ -187,6 +199,17 @@ impl App {
             self.status = "no chat selected — Ctrl-N to invite someone".into();
             return;
         };
+        if let Some(name) = text.strip_prefix("/name ") {
+            let name = name.trim().to_string();
+            if !name.is_empty() {
+                let _ = self.outbound.send(Cmd::Rename { contact_id: sel, name: name.clone() });
+                if let Some(c) = self.current() {
+                    c.name = name;
+                }
+            }
+            self.input.clear();
+            return;
+        }
         let wire_id = ulid::Ulid::new().to_string();
         if let Some(path) = text.strip_prefix("/file ") {
             let path = path.trim().to_string();
@@ -269,6 +292,20 @@ impl App {
                 Style::default().fg(Color::Gray)
             };
             side.push(Line::from(Span::styled(format!("{marker}{}{suffix}", c.name), style)));
+        }
+        if self.inviting {
+            const FRAMES: [char; 10] =
+                ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+            let f_idx = (std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+                / 100) as usize
+                % FRAMES.len();
+            side.push(Line::from(Span::styled(
+                format!("  {} inviting…", FRAMES[f_idx]),
+                Style::default().fg(Color::DarkGray),
+            )));
         }
         f.render_widget(
             Paragraph::new(side).block(Block::default().borders(Borders::RIGHT)),
@@ -489,10 +526,13 @@ impl App {
                             }
                         }
                         (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
-                            let n = self.chats.len();
-                            let _ = self
-                                .outbound
-                                .send(Cmd::NewInvite { name: format!("Contact {}", n + 1) });
+                            if !self.inviting {
+                                self.inviting = true;
+                                let n = self.chats.len();
+                                let _ = self
+                                    .outbound
+                                    .send(Cmd::NewInvite { name: format!("Contact {}", n + 1) });
+                            }
                         }
                         (KeyCode::Char('u'), KeyModifiers::CONTROL) => self.unsend_last(),
                         (KeyCode::Char('r'), KeyModifiers::CONTROL) => self.react_mode = true,
