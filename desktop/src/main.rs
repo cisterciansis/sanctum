@@ -132,6 +132,7 @@ struct ChatApp {
     status: SharedString,
     settings: Settings,
     show_settings: bool,
+    show_chat_info: bool,
     show_sidebar: bool,
     inviting: bool,
     picker_for: Option<usize>,
@@ -178,6 +179,7 @@ impl ChatApp {
             status: "loading…".into(),
             settings,
             show_settings: false,
+            show_chat_info: false,
             show_sidebar: true,
             inviting: false,
             picker_for: None,
@@ -455,6 +457,30 @@ impl ChatApp {
                 .children(trailing);
             col = col.child(row);
         }
+        let footer_settings = h_flex()
+            .id("app-settings")
+            .cursor_pointer()
+            .w_full()
+            .items_center()
+            .gap_1p5()
+            .px_2()
+            .py_1p5()
+            .rounded_md()
+            .text_sm()
+            .text_color(rgb(p.sub))
+            .hover(|d| d.bg(rgb(p.hover)))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.show_settings = !this.show_settings;
+                this.show_chat_info = false;
+                cx.notify();
+            }))
+            .child(
+                Icon::new(gpui_kit::assets::IconName::Settings)
+                    .with_size(px(14.))
+                    .text_color(rgb(p.sub)),
+            )
+            .child("Settings");
+
         if self.inviting {
             col = col.child(
                 div()
@@ -471,7 +497,7 @@ impl ChatApp {
                     ),
             );
         }
-        col
+        col.child(div().flex_1()).child(footer_settings)
     }
 }
 
@@ -534,10 +560,11 @@ impl Render for ChatApp {
                     })),
             )
             .child(
-                Button::new("settings-menu").ghost().label("⋯").on_click(cx.listener(
+                Button::new("chat-info").ghost().label("⋯").on_click(cx.listener(
                     |this, _, window, cx| {
-                        this.show_settings = !this.show_settings;
-                        if this.show_settings {
+                        this.show_chat_info = !this.show_chat_info;
+                        this.show_settings = false;
+                        if this.show_chat_info {
                             let name = this
                                 .chats
                                 .get(this.selected)
@@ -635,6 +662,33 @@ impl Render for ChatApp {
                         ),
                     ),
                 )
+                .child(
+                    div()
+                        .pt_1()
+                        .text_xs()
+                        .text_color(rgb(p.sub))
+                        .child("End-to-end encrypted · mailboxes on Hippius (Bittensor SN75)"),
+                )
+        });
+
+        // Per-chat details behind the ⋯ button: name, timer, delete.
+        let chat_info_panel = (self.show_chat_info && self.selected_id().is_some()).then(|| {
+            let row = |label: &str, hint: Option<&str>| {
+                let mut l = v_flex()
+                    .flex_1()
+                    .child(div().text_sm().text_color(rgb(p.text)).child(label.to_string()));
+                if let Some(h) = hint {
+                    l = l.child(div().text_xs().text_color(rgb(p.sub)).child(h.to_string()));
+                }
+                h_flex().w_full().items_center().gap_3().child(l)
+            };
+            v_flex()
+                .w_full()
+                .gap_3()
+                .p_3()
+                .bg(rgb(p.surface))
+                .border_b_1()
+                .border_color(rgb(p.border))
                 .child(
                     row("Disappearing messages", Some("timed local deletion, synced to contact"))
                         .child(
@@ -984,6 +1038,7 @@ impl Render for ChatApp {
             .bg(rgb(p.bg))
             .child(header)
             .children(settings_panel)
+            .children(chat_info_panel)
             .children(banner)
             .child(messages)
             .child(composer);
