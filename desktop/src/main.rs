@@ -17,20 +17,25 @@ use sanctum_core::demo::{spawn_worker, Cmd, Event, Settings};
 
 struct Msg {
     id: u64,
+    /// Cross-device name for this message (reaction/edit references).
+    wire_id: String,
     mine: bool,
     delivered: bool,
+    reaction: Option<SharedString>,
     text: SharedString,
     time: SharedString,
     day: String,
 }
 
 impl Msg {
-    fn now(id: u64, mine: bool, text: String) -> Self {
+    fn now(id: u64, wire_id: String, mine: bool, text: String) -> Self {
         let now = Local::now();
         Self {
             id,
+            wire_id,
             mine,
             delivered: false,
+            reaction: None,
             text: text.into(),
             time: now.format("%-I:%M %p").to_string().into(),
             day: now.format("%A, %b %-d").to_string(),
@@ -105,7 +110,16 @@ impl ChatApp {
                     self.paired = true;
                     self.status = "end-to-end encrypted · hippius".into();
                 }
-                Event::Received(text) => self.msgs.push(Msg::now(u64::MAX, false, text)),
+                Event::Received { wire_id, text } => {
+                    self.msgs.push(Msg::now(u64::MAX, wire_id, false, text))
+                }
+                Event::Reaction { ref_id, emoji } => {
+                    if let Some(m) =
+                        self.msgs.iter_mut().find(|m| !m.wire_id.is_empty() && m.wire_id == ref_id)
+                    {
+                        m.reaction = Some(emoji.into());
+                    }
+                }
                 Event::Delivered(id) => {
                     if let Some(m) = self.msgs.iter_mut().find(|m| m.mine && m.id == id) {
                         m.delivered = true;
@@ -128,8 +142,9 @@ impl ChatApp {
         self.input_state.update(cx, |s, cx| s.set_value("", window, cx));
         let id = self.next_id;
         self.next_id += 1;
-        self.msgs.push(Msg::now(id, true, text.clone()));
-        let _ = self.outbound.send(Cmd::Send(id, text));
+        let wire_id = ulid::Ulid::new().to_string();
+        self.msgs.push(Msg::now(id, wire_id.clone(), true, text.clone()));
+        let _ = self.outbound.send(Cmd::Send { id, wire_id, text });
         cx.notify();
     }
 }
@@ -258,6 +273,8 @@ impl Render for ChatApp {
             }
 
             let id = m.id;
+            let reactable = !m.mine && !m.wire_id.is_empty();
+            let wire_id = m.wire_id.clone();
             let bubble: AnyElement = if unsendable {
                 bubble
                     .id(("msg", i))
@@ -266,15 +283,40 @@ impl Render for ChatApp {
                     }))
                     .child(m.text.clone())
                     .into_any_element()
+            } else if reactable {
+                // Click a received bubble to tapback a heart.
+                bubble
+                    .id(("msg", i))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let _ = this.outbound.send(Cmd::React {
+                            ref_id: wire_id.clone(),
+                            emoji: "❤️".into(),
+                        });
+                        if let Some(m) = this.msgs.get_mut(i) {
+                            m.reaction = Some("❤️".into());
+                        }
+                        cx.notify();
+                    }))
+                    .child(m.text.clone())
+                    .into_any_element()
             } else {
                 bubble.child(m.text.clone()).into_any_element()
+            };
+
+            let mut row = h_flex().items_end().gap_1();
+            row = if m.mine {
+                row.child(div().when_some(m.reaction.clone(), |d, r| d.child(r)).text_sm())
+                    .child(bubble)
+            } else {
+                row.child(bubble)
+                    .child(div().when_some(m.reaction.clone(), |d, r| d.child(r)).text_sm())
             };
 
             let mut col = v_flex()
                 .w_full()
                 .when(m.mine, |d| d.items_end())
                 .when(!m.mine, |d| d.items_start())
-                .child(bubble);
+                .child(row);
             if !caption.is_empty() {
                 col = col.child(
                     div()

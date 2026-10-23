@@ -6574,6 +6574,7 @@ dependencies = [
  "crossterm",
  "ratatui",
  "sanctum-core",
+ "ulid",
 ]
 
 [[package]]

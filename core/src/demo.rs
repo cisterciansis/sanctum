@@ -26,7 +26,8 @@ impl Session {
     /// Role is "alice" or "bob"; creds picked from env accordingly.
     pub fn from_env() -> Result<Self, String> {
         let role = std::env::var("SANCTUM_ROLE").unwrap_or_else(|_| "alice".into());
-        let peer = if role == "alice" { "bob" } else { "alice" };
+        let default_peer = if role == "alice" { "bob" } else { "alice" };
+        let peer = std::env::var("SANCTUM_PEER").unwrap_or_else(|_| default_peer.into());
         let (ak, sk) = if role == "alice" {
             ("OWNER_KEY", "OWNER_SECRET")
         } else {
@@ -79,13 +80,25 @@ impl Session {
         self.peer_pk.is_some()
     }
 
-    /// Returns the deposited object key (used for delivery receipts).
-    pub fn send(&self, text: &str) -> Result<String, String> {
+    fn deposit(&self, body: &serde_json::Value) -> Result<String, String> {
         let pk = self.peer_pk.as_ref().ok_or("not paired yet")?;
-        let sealed = seal(&self.me, pk, text.as_bytes()).map_err(|e| e.to_string())?;
+        let sealed =
+            seal(&self.me, pk, body.to_string().as_bytes()).map_err(|e| e.to_string())?;
         let key = format!("to-{}/{}", self.peer, ulid::Ulid::new());
         self.mbox.put(&key, &sealed).map_err(|e| e.to_string())?;
         Ok(key)
+    }
+
+    /// Send a text message. `wire_id` names it across devices (reactions,
+    /// edits reference it). Returns the deposited object key (receipts).
+    pub fn send(&self, wire_id: &str, text: &str) -> Result<String, String> {
+        self.deposit(&serde_json::json!({ "t": "m", "id": wire_id, "x": text }))
+    }
+
+    /// React to a message by its wire id. Fire-and-forget control message.
+    pub fn react(&self, ref_id: &str, emoji: &str) -> Result<(), String> {
+        self.deposit(&serde_json::json!({ "t": "r", "ref": ref_id, "e": emoji }))?;
+        Ok(())
     }
 
     /// Delivery check for a key this side deposited: the recipient deletes
@@ -101,7 +114,7 @@ impl Session {
     }
 
     /// Drain this side's inbox prefix; delete after successful decrypt.
-    pub fn poll(&self) -> Vec<String> {
+    pub fn poll(&self) -> Vec<Incoming> {
         let mut out = Vec::new();
         let Ok(keys) = self.mbox.list(&format!("to-{}/", self.role)) else {
             return out;
@@ -109,11 +122,33 @@ impl Session {
         for key in keys {
             let Ok(raw) = self.mbox.get(&key) else { continue };
             if let Ok((_, pt)) = open(&self.me, &raw) {
-                out.push(String::from_utf8_lossy(&pt).into_owned());
+                out.push(Incoming::parse(&pt));
                 let _ = self.mbox.delete(&key);
             }
         }
         out
+    }
+}
+
+/// A decrypted inbox item. Non-JSON payloads (pre-wire-format builds) fall
+/// back to a plain message with an empty id.
+pub enum Incoming {
+    Message { id: String, text: String },
+    Reaction { ref_id: String, emoji: String },
+}
+
+impl Incoming {
+    fn parse(pt: &[u8]) -> Self {
+        let txt = String::from_utf8_lossy(pt);
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
+            let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string();
+            match v.get("t").and_then(|t| t.as_str()) {
+                Some("m") => return Incoming::Message { id: s("id"), text: s("x") },
+                Some("r") => return Incoming::Reaction { ref_id: s("ref"), emoji: s("e") },
+                _ => {}
+            }
+        }
+        Incoming::Message { id: String::new(), text: txt.into_owned() }
     }
 }
 
@@ -169,9 +204,11 @@ impl Settings {
     }
 }
 
-/// Commands a UI sends to the worker. Ids are UI-chosen per message.
+/// Commands a UI sends to the worker. `id` is the UI's local handle;
+/// `wire_id` names the message across devices (reaction/edit references).
 pub enum Cmd {
-    Send(u64, String),
+    Send { id: u64, wire_id: String, text: String },
+    React { ref_id: String, emoji: String },
     /// Delete the message from the drop if the peer hasn't fetched it yet.
     Unsend(u64),
 }
@@ -181,7 +218,8 @@ pub enum Cmd {
 /// decrypted that message (its drop object is gone).
 pub enum Event {
     Paired,
-    Received(String),
+    Received { wire_id: String, text: String },
+    Reaction { ref_id: String, emoji: String },
     Delivered(u64),
     Unsent(u64),
     Error(String),
@@ -208,12 +246,17 @@ pub fn spawn_worker(outbound: Receiver<Cmd>, events: Sender<Event>) {
             }
             while let Ok(cmd) = outbound.try_recv() {
                 match cmd {
-                    Cmd::Send(id, text) => match session.send(&text) {
+                    Cmd::Send { id, wire_id, text } => match session.send(&wire_id, &text) {
                         Ok(key) => pending.push((id, key, false)),
                         Err(e) => {
                             let _ = events.send(Event::Error(e));
                         }
                     },
+                    Cmd::React { ref_id, emoji } => {
+                        if let Err(e) = session.react(&ref_id, &emoji) {
+                            let _ = events.send(Event::Error(e));
+                        }
+                    }
                     Cmd::Unsend(id) => {
                         if let Some(pos) = pending.iter().position(|(pid, ..)| *pid == id) {
                             let (_, key, _) = pending.remove(pos);
@@ -232,8 +275,11 @@ pub fn spawn_worker(outbound: Receiver<Cmd>, events: Sender<Event>) {
                 }
             }
             if paired {
-                for text in session.poll() {
-                    let _ = events.send(Event::Received(text));
+                for item in session.poll() {
+                    let _ = events.send(match item {
+                        Incoming::Message { id, text } => Event::Received { wire_id: id, text },
+                        Incoming::Reaction { ref_id, emoji } => Event::Reaction { ref_id, emoji },
+                    });
                 }
             }
             pending.retain_mut(|(id, key, seen)| match session.is_delivered(key) {

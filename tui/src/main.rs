@@ -19,20 +19,24 @@ use sanctum_core::demo::{spawn_worker, Cmd, Event, Settings};
 
 struct Msg {
     id: u64,
+    wire_id: String,
     mine: bool,
     delivered: bool,
+    reaction: Option<String>,
     text: String,
     time: String,
     day: String,
 }
 
 impl Msg {
-    fn now(id: u64, mine: bool, text: String) -> Self {
+    fn now(id: u64, wire_id: String, mine: bool, text: String) -> Self {
         let now = Local::now();
         Self {
             id,
+            wire_id,
             mine,
             delivered: false,
+            reaction: None,
             text,
             time: now.format("%-I:%M %p").to_string(),
             day: now.format("%A, %b %-d").to_string(),
@@ -81,7 +85,16 @@ impl App {
                     self.paired = true;
                     self.status = "end-to-end encrypted · hippius".into();
                 }
-                Event::Received(text) => self.msgs.push(Msg::now(u64::MAX, false, text)),
+                Event::Received { wire_id, text } => {
+                    self.msgs.push(Msg::now(u64::MAX, wire_id, false, text))
+                }
+                Event::Reaction { ref_id, emoji } => {
+                    if let Some(m) =
+                        self.msgs.iter_mut().find(|m| !m.wire_id.is_empty() && m.wire_id == ref_id)
+                    {
+                        m.reaction = Some(emoji);
+                    }
+                }
                 Event::Delivered(id) => {
                     if let Some(m) = self.msgs.iter_mut().find(|m| m.mine && m.id == id) {
                         m.delivered = true;
@@ -100,14 +113,28 @@ impl App {
         }
         let id = self.next_id;
         self.next_id += 1;
-        self.msgs.push(Msg::now(id, true, text.clone()));
-        let _ = self.outbound.send(Cmd::Send(id, text));
+        let wire_id = ulid::Ulid::new().to_string();
+        self.msgs.push(Msg::now(id, wire_id.clone(), true, text.clone()));
+        let _ = self.outbound.send(Cmd::Send { id, wire_id, text });
         self.input.clear();
     }
 
     fn unsend_last(&mut self) {
         if let Some(m) = self.msgs.iter().rev().find(|m| m.mine && !m.delivered) {
             let _ = self.outbound.send(Cmd::Unsend(m.id));
+        }
+    }
+
+    /// Heart the last received message.
+    fn react_last(&mut self) {
+        if let Some(m) = self
+            .msgs
+            .iter_mut()
+            .rev()
+            .find(|m| !m.mine && !m.wire_id.is_empty())
+        {
+            m.reaction = Some("❤️".into());
+            let _ = self.outbound.send(Cmd::React { ref_id: m.wire_id.clone(), emoji: "❤️".into() });
         }
     }
 
@@ -119,7 +146,7 @@ impl App {
         ])
         .areas(f.area());
 
-        let hint = "enter send · ^U unsend · ^S settings · esc quit";
+        let hint = "enter send · ^R react · ^U unsend · ^S settings · esc quit";
         let title = Line::from(vec![
             Span::raw(" "),
             Span::raw(&self.peer).bold(),
@@ -191,12 +218,18 @@ impl App {
             } else {
                 String::new()
             };
+            let react = m.reaction.clone().map(|r| format!(" {r}")).unwrap_or_default();
             let line = if m.mine {
                 let receipt = if m.delivered { " ✓" } else { "" };
-                let pad = width
-                    .saturating_sub(text.chars().count() + receipt.chars().count() + time.chars().count());
+                let pad = width.saturating_sub(
+                    text.chars().count()
+                        + receipt.chars().count()
+                        + time.chars().count()
+                        + react.chars().count(),
+                );
                 Line::from(vec![
                     Span::raw(" ".repeat(pad)),
+                    Span::raw(react.clone()),
                     Span::styled(time, Style::default().fg(Color::DarkGray)),
                     Span::styled(text, style),
                     Span::styled(receipt.to_string(), Style::default().fg(Color::Green)),
@@ -204,6 +237,7 @@ impl App {
             } else {
                 Line::from(vec![
                     Span::styled(text, style),
+                    Span::raw(react),
                     Span::styled(format!(" {time}"), Style::default().fg(Color::DarkGray)),
                 ])
             };
@@ -251,6 +285,7 @@ impl App {
                         (KeyCode::Esc, _) => return Ok(()),
                         (KeyCode::Char('c'), KeyModifiers::CONTROL) => return Ok(()),
                         (KeyCode::Char('u'), KeyModifiers::CONTROL) => self.unsend_last(),
+                        (KeyCode::Char('r'), KeyModifiers::CONTROL) => self.react_last(),
                         (KeyCode::Char('s'), KeyModifiers::CONTROL) => self.show_settings = true,
                         (KeyCode::Enter, _) => self.send_current(),
                         (KeyCode::Backspace, _) => {
