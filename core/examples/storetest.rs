@@ -34,6 +34,7 @@ fn main() {
                 ts_ms: sanctum_core::store::chrono_now_ms(),
                 delivered: false,
                 reaction: None,
+                sender_seat: None,
             },
         )
         .expect("add msg");
@@ -50,6 +51,28 @@ fn main() {
     assert_eq!(msgs.len(), 1);
     assert!(msgs[0].delivered);
     assert_eq!(msgs[0].reaction.as_deref(), Some("❤️"));
+
+    // Group conversations persist under negative ids (no contacts row).
+    let gid = -987_654;
+    store
+        .add_msg(
+            gid,
+            &StoredMsg {
+                wire_id: "g1".into(),
+                mine: false,
+                text: "group persisted".into(),
+                file_path: None,
+                ts_ms: sanctum_core::store::chrono_now_ms(),
+                delivered: false,
+                reaction: None,
+                sender_seat: Some(1),
+            },
+        )
+        .expect("group message insert");
+    let gmsgs = store.messages(gid).expect("group messages");
+    assert_eq!(gmsgs.len(), 1, "group message must persist");
+    assert_eq!(gmsgs[0].sender_seat, Some(1));
+    store.clear_history(gid, None).expect("clear group test msg");
 
     // Cleanup everything the test created (contact row included).
     store.delete_contact(cid).expect("del contact");

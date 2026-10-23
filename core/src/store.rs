@@ -140,6 +140,11 @@ impl Store {
             );",
         )
         .map_err(|e| Error::Crypto(e.to_string()))?;
+        // Group conversations store messages under negative ids that have no
+        // contacts row; the bundled SQLite enforces FKs by default, which
+        // silently rejected every group message insert.
+        conn.pragma_update(None, "foreign_keys", "OFF")
+            .map_err(|e| Error::Crypto(e.to_string()))?;
         // Additive migration for pre-group databases; harmless when present.
         let _ = conn.execute("ALTER TABLE messages ADD COLUMN sender_seat INTEGER", []);
         Ok(Self { conn })

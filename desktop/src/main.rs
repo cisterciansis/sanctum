@@ -79,6 +79,7 @@ struct Msg {
     text: SharedString,
     file: Option<(SharedString, String)>,
     sender_seat: Option<i64>,
+    ts_ms: i64,
     time: SharedString,
     day: String,
 }
@@ -94,6 +95,7 @@ impl Msg {
             text: m.text.clone().into(),
             file: m.file_path.map(|p| (m.text.into(), p)),
             sender_seat: m.sender_seat,
+            ts_ms: m.ts_ms,
             time: ts.format("%-I:%M %p").to_string().into(),
             day: ts.format("%A, %b %-d").to_string(),
         }
@@ -109,6 +111,7 @@ impl Msg {
             text: text.into(),
             file: file.map(|(n, p)| (n.into(), p)),
             sender_seat: None,
+            ts_ms: now.timestamp_millis(),
             time: now.format("%-I:%M %p").to_string().into(),
             day: now.format("%A, %b %-d").to_string(),
         }
@@ -142,9 +145,11 @@ struct ChatApp {
     show_group: bool,
     group_size: i64,
     inviting: bool,
+    joining: bool,
     picker_for: Option<usize>,
     chat_menu_for: Option<usize>,
     copied_at: Option<std::time::Instant>,
+    hovered_msg: Option<usize>,
     input_state: Entity<InputState>,
     rename_state: Entity<InputState>,
     join_state: Entity<InputState>,
@@ -166,7 +171,7 @@ impl ChatApp {
 
         let input_state = cx.new(|cx| InputState::new(window, cx).placeholder("Sanctum"));
         let rename_state = cx.new(|cx| InputState::new(window, cx));
-        let join_state = cx.new(|cx| InputState::new(window, cx).placeholder("sanctum://v2/…"));
+        let join_state = cx.new(|cx| InputState::new(window, cx).placeholder("sanctum://…"));
         let group_state = cx.new(|cx| InputState::new(window, cx).placeholder("Group name"));
         let _subscriptions = vec![cx.subscribe_in(&input_state, window, {
             move |this: &mut Self, _, ev: &InputEvent, window, cx| {
@@ -199,9 +204,11 @@ impl ChatApp {
             show_group: false,
             group_size: 3,
             inviting: false,
+            joining: false,
             picker_for: None,
             chat_menu_for: None,
             copied_at: None,
+            hovered_msg: None,
             input_state,
             rename_state,
             join_state,
@@ -237,6 +244,10 @@ impl ChatApp {
                 }
                 Event::ContactAdded(c) => {
                     self.inviting = false;
+                    if self.joining {
+                        self.joining = false;
+                        self.show_join = false;
+                    }
                     self.chats.push(Chat {
                         id: c.id,
                         name: c.name.into(),
@@ -250,6 +261,12 @@ impl ChatApp {
                 Event::History { contact_id, msgs } => {
                     if let Some(c) = self.chat_by_id(contact_id) {
                         c.msgs = msgs.into_iter().map(Msg::from_stored).collect();
+                    }
+                }
+                Event::ContactUpdated(c) => {
+                    if let Some(chat) = self.chat_by_id(c.id) {
+                        chat.waiting = c.peer_pk.is_empty();
+                        chat.invite_link = c.invite_link;
                     }
                 }
                 Event::ContactRemoved { contact_id } => {
@@ -300,6 +317,7 @@ impl ChatApp {
                 }
                 Event::Error(e) => {
                     self.inviting = false;
+                    self.joining = false;
                     self.status = format!("error: {e}").into();
                 }
             }
@@ -562,7 +580,7 @@ impl ChatApp {
             if self.chat_menu_for == Some(i) {
                 let id = c.id;
                 let pending_link =
-                    (c.waiting && !c.invite_link.is_empty()).then(|| c.invite_link.clone());
+                    (!c.invite_link.trim().is_empty()).then(|| c.invite_link.clone());
                 let item = |label: &str, danger: bool, pal_text: u32, pal_hover: u32| {
                     div()
                         .cursor_pointer()
@@ -605,6 +623,9 @@ impl ChatApp {
                     let links: Vec<String> = link.split('\n').map(str::to_string).collect();
                     let many = links.len() > 1;
                     for (n, one) in links.into_iter().enumerate() {
+                        if one.is_empty() {
+                            continue;
+                        }
                         let label = if many {
                             format!("Copy Member {} invite", n + 2)
                         } else {
@@ -692,7 +713,7 @@ impl ChatApp {
             )
             .child("Settings");
 
-        if self.inviting {
+        if self.inviting || self.joining {
             col = col.child(
                 div()
                     .w_full()
@@ -700,7 +721,7 @@ impl ChatApp {
                     .py_1p5()
                     .text_sm()
                     .text_color(rgb(p.sub))
-                    .child("Inviting…")
+                    .child(if self.joining { "Joining…" } else { "Inviting…" })
                     .with_animation(
                         "inviting-shimmer",
                         Animation::new(Duration::from_millis(900)).repeat(),
@@ -1097,8 +1118,12 @@ impl Render for ChatApp {
                         .text_sm()
                         .text_color(rgb(0xFFFFFF))
                         .on_click(cx.listener(|this, _, window, cx| {
+                            if this.joining {
+                                return;
+                            }
                             let link = this.join_state.read(cx).value().trim().to_string();
                             if link.starts_with("sanctum://v2/") || link.starts_with("sanctum://g1/") {
+                                this.joining = true;
                                 let n = this.chats.len();
                                 let _ = this.outbound.send(Cmd::AcceptInvite {
                                     link,
@@ -1106,11 +1131,10 @@ impl Render for ChatApp {
                                 });
                                 this.join_state.update(cx, |s, cx| s.set_value("", window, cx));
                                 window.blur(cx);
-                                this.show_join = false;
                                 cx.notify();
                             }
                         }))
-                        .child("Join"),
+                        .child(if self.joining { "Joining…" } else { "Join" }),
                 )
                 .child(
                     div()
@@ -1133,7 +1157,7 @@ impl Render for ChatApp {
         let banner_link = self
             .chats
             .get(self.selected)
-            .filter(|c| c.waiting && !c.invite_link.is_empty())
+            .filter(|c| !c.invite_link.trim().is_empty())
             .map(|c| c.invite_link.clone());
         let copied = self.copied_at.is_some();
         let banner = banner_link.map(|link| {
@@ -1160,6 +1184,9 @@ impl Render for ChatApp {
                     "Share this link. It carries everything they need — no account, no signup."
                 }));
             for (n, one) in links.into_iter().enumerate() {
+                if one.is_empty() {
+                    continue; // seat already claimed
+                }
                 let short = format!("{}…", &one[..one.len().min(40)]);
                 card = card.child(
                     h_flex()
@@ -1225,18 +1252,25 @@ impl Render for ChatApp {
         let mut rows: Vec<AnyElement> = Vec::new();
         if let Some(chat) = self.chats.get(self.selected) {
             let last_delivered = chat.msgs.iter().rposition(|m| m.mine && m.delivered);
-            let mut prev_day: Option<&str> = None;
             for (i, m) in chat.msgs.iter().enumerate() {
-                if prev_day != Some(m.day.as_str()) {
-                    prev_day = Some(m.day.as_str());
+                let prev = i.checked_sub(1).and_then(|j| chat.msgs.get(j));
+                let new_day = prev.is_none_or(|pm| pm.day != m.day);
+                let gap = prev.is_none_or(|pm| m.ts_ms - pm.ts_ms > 5 * 60 * 1000);
+                if new_day || (show_time && gap) {
+                    let label = if new_day {
+                        format!("{} · {}", m.day, m.time)
+                    } else {
+                        m.time.to_string()
+                    };
                     rows.push(
                         div()
                             .w_full()
                             .text_center()
                             .text_xs()
                             .text_color(rgb(p.sub))
-                            .py_1()
-                            .child(m.day.clone())
+                            .pt_2()
+                            .pb_1()
+                            .child(label)
                             .into_any_element(),
                     );
                 }
@@ -1263,7 +1297,7 @@ impl Render for ChatApp {
                 };
 
                 let mut caption: Vec<String> = Vec::new();
-                if show_time {
+                if self.hovered_msg == Some(i) {
                     caption.push(m.time.to_string());
                 }
                 let unsendable = m.mine && !m.delivered && chat.id >= 0;
@@ -1337,7 +1371,12 @@ impl Render for ChatApp {
                     pill
                 });
 
-                let mut row = h_flex().items_end().gap_1();
+                let mut row = h_flex()
+                    .w_full()
+                    .items_end()
+                    .gap_1()
+                    .when(m.mine, |d| d.justify_end())
+                    .when(!m.mine, |d| d.justify_start());
                 row = if m.mine {
                     row.child(div().when_some(m.reaction.clone(), |d, r| d.child(r)).text_sm())
                         .child(bubble)
@@ -1346,7 +1385,10 @@ impl Render for ChatApp {
                         .child(div().when_some(m.reaction.clone(), |d, r| d.child(r)).text_sm())
                 };
 
-                let sender_label = (!m.mine)
+                let same_sender = prev.is_some_and(|pm| {
+                    !pm.mine && pm.sender_seat == m.sender_seat && !new_day && !gap
+                });
+                let sender_label = (!m.mine && !same_sender)
                     .then(|| m.sender_seat)
                     .flatten()
                     .map(|seat| {

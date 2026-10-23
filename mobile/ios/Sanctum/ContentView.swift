@@ -39,19 +39,18 @@ struct ContentView: View {
                             } label: {
                                 Label("Rename", systemImage: "pencil")
                             }
-                            if chat.waiting && !chat.inviteLink.isEmpty {
-                                let links = chat.inviteLink.split(separator: "\n").map(String.init)
-                                if links.count == 1 {
+                            if !chat.openInvites.isEmpty {
+                                if !chat.isGroupInvite, let only = chat.openInvites.first {
                                     Button {
-                                        UIPasteboard.general.string = links[0]
+                                        UIPasteboard.general.string = only.link
                                     } label: {
                                         Label("Copy Invite Link", systemImage: "link")
                                     }
                                 } else {
                                     Menu {
-                                        ForEach(Array(links.enumerated()), id: \.offset) { n, one in
-                                            Button("Member \(n + 2)") {
-                                                UIPasteboard.general.string = one
+                                        ForEach(chat.openInvites, id: \.n) { seat in
+                                            Button("Member \(seat.n + 2)") {
+                                                UIPasteboard.general.string = seat.link
                                             }
                                         }
                                     } label: {
@@ -199,31 +198,45 @@ struct JoinSheet: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) var dismiss
     @State private var link = ""
+    @State private var waiting = false
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Invite link") {
-                    TextField("sanctum://v2/…", text: $link, axis: .vertical)
+                    TextField("sanctum://…", text: $link, axis: .vertical)
                         .lineLimit(3...6)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                 }
                 Section {
-                    Button("Join") {
-                        model.join(link)
-                        dismiss()
+                    if waiting {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                            Text("Joining…").foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Button("Join") {
+                            waiting = true
+                            model.join(link)
+                        }
+                        .disabled({
+                            let t = link.trimmingCharacters(in: .whitespacesAndNewlines)
+                            return !(t.hasPrefix("sanctum://v2/") || t.hasPrefix("sanctum://g1/"))
+                        }())
                     }
-                    .disabled({
-                        let t = link.trimmingCharacters(in: .whitespacesAndNewlines)
-                        return !(t.hasPrefix("sanctum://v2/") || t.hasPrefix("sanctum://g1/"))
-                    }())
                 } footer: {
                     Text("An invite carries everything you need — no account, no signup.")
                 }
             }
             .navigationTitle("Join a chat")
             .preferredColorScheme(model.colorScheme)
+            .onChange(of: model.chats.count) {
+                if waiting { dismiss() }
+            }
+            .onChange(of: model.status) {
+                if waiting && model.status.hasPrefix("error") { waiting = false }
+            }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -347,23 +360,62 @@ struct ChatView: View {
     @State private var showFileImporter = false
     @State private var showRename = false
     @State private var renameText = ""
+    @State private var reveal: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
-            if chat.waiting && !chat.inviteLink.isEmpty {
-                InviteBanner(link: chat.inviteLink)
+            if !chat.openInvites.isEmpty {
+                InviteBanner(seats: chat.openInvites, isGroup: chat.isGroupInvite)
             }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 4) {
-                        ForEach(chat.msgs) { msg in
-                            Bubble(chatId: chat.id, msg: msg)
-                                .transition(.scale(scale: 0.96).combined(with: .opacity))
+                        ForEach(Array(chat.msgs.enumerated()), id: \.element.id) { i, msg in
+                            let prev = i > 0 ? chat.msgs[i - 1] : nil
+                            let newDay = prev.map {
+                                !Calendar.current.isDate($0.ts, inSameDayAs: msg.ts)
+                            } ?? true
+                            let gap = prev.map { msg.ts.timeIntervalSince($0.ts) > 300 } ?? true
+                            if newDay || (model.settings.timestamps && gap) {
+                                Text(timeHeader(msg.ts))
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.top, 10)
+                                    .padding(.bottom, 2)
+                            }
+                            let sameSender = prev.map {
+                                !$0.mine && !msg.mine && $0.senderSeat == msg.senderSeat
+                                    && !gap && !newDay
+                            } ?? false
+                            // Swipe left anywhere to slide every bubble over and
+                            // reveal exact send times (iMessage gesture).
+                            ZStack(alignment: .trailing) {
+                                Bubble(chatId: chat.id, msg: msg, showSender: !sameSender)
+                                    .offset(x: reveal)
+                                Text(msg.ts.formatted(date: .omitted, time: .shortened))
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize()
+                                    .offset(x: 72 + reveal)
+                                    .opacity(Double(min(1, -reveal / 50)))
+                            }
+                            .transition(.scale(scale: 0.96).combined(with: .opacity))
                         }
                     }
                     .padding(12)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 15)
+                        .onChanged { v in
+                            guard abs(v.translation.width) > abs(v.translation.height) else { return }
+                            reveal = max(-72, min(0, v.translation.width))
+                        }
+                        .onEnded { _ in
+                            withAnimation(.spring(duration: 0.3, bounce: 0.1)) { reveal = 0 }
+                        }
+                )
                 .animation(.spring(duration: 0.25, bounce: 0.15), value: chat.msgs.count)
                 .onChange(of: chat.msgs.count) {
                     if let last = chat.msgs.last {
@@ -453,22 +505,21 @@ struct ChatView: View {
                     } label: {
                         Label("Rename", systemImage: "pencil")
                     }
-                    if chat.waiting && !chat.inviteLink.isEmpty {
-                        let links = chat.inviteLink.split(separator: "\n").map(String.init)
-                        if links.count == 1 {
+                    if !chat.openInvites.isEmpty {
+                        if !chat.isGroupInvite, let only = chat.openInvites.first {
                             Button {
-                                UIPasteboard.general.string = links[0]
+                                UIPasteboard.general.string = only.link
                             } label: {
                                 Label("Copy Invite Link", systemImage: "link")
                             }
-                            ShareLink(item: links[0]) {
+                            ShareLink(item: only.link) {
                                 Label("Share Invite", systemImage: "square.and.arrow.up")
                             }
                         } else {
                             Menu {
-                                ForEach(Array(links.enumerated()), id: \.offset) { n, one in
-                                    Button("Member \(n + 2)") {
-                                        UIPasteboard.general.string = one
+                                ForEach(chat.openInvites, id: \.n) { seat in
+                                    Button("Member \(seat.n + 2)") {
+                                        UIPasteboard.general.string = seat.link
                                     }
                                 }
                             } label: {
@@ -527,20 +578,22 @@ struct PressableStyle: ButtonStyle {
 }
 
 struct InviteBanner: View {
-    let link: String
+    let seats: [(n: Int, link: String)]
+    let isGroup: Bool
     @State private var copiedIdx: Int? = nil
 
     var body: some View {
-        let links = link.split(separator: "\n").map(String.init)
         VStack(alignment: .leading, spacing: 6) {
             Text("Invitation pending").font(.subheadline).bold()
-            Text(links.count > 1
+            Text(isGroup
                 ? "One link per member — each is single-use."
                 : "Share this link. It carries everything they need.")
                 .font(.caption).foregroundStyle(.secondary)
-            ForEach(Array(links.enumerated()), id: \.offset) { n, one in
+            ForEach(seats, id: \.n) { seat in
+                let n = seat.n
+                let one = seat.link
                 HStack(spacing: 8) {
-                    if links.count > 1 {
+                    if isGroup {
                         Text("Member \(n + 2)")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
@@ -592,22 +645,31 @@ func resolveFile(_ path: String) -> String? {
     return nil
 }
 
+func timeHeader(_ d: Date) -> String {
+    let time = d.formatted(date: .omitted, time: .shortened)
+    if Calendar.current.isDateInToday(d) { return "Today \(time)" }
+    if Calendar.current.isDateInYesterday(d) { return "Yesterday \(time)" }
+    return d.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()) + " " + time
+}
+
 struct Bubble: View {
     @EnvironmentObject var model: AppModel
     let chatId: Int64
     let msg: MsgVM
+    var showSender = true
 
     var body: some View {
         HStack {
             if msg.mine { Spacer(minLength: 60) }
             VStack(alignment: msg.mine ? .trailing : .leading, spacing: 2) {
-                if !msg.mine, let seat = msg.senderSeat {
+                if showSender, !msg.mine, let seat = msg.senderSeat {
                     Text("Member \(seat + 1)")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
                 bubbleContent
                     .contextMenu {
+                        Text(msg.ts.formatted(date: .abbreviated, time: .shortened))
                         if !msg.mine {
                             ControlGroup {
                                 ForEach(tapbacks.prefix(4), id: \.self) { emoji in
@@ -633,9 +695,6 @@ struct Bubble: View {
                     }
                 HStack(spacing: 4) {
                     if let r = msg.reaction { Text(r).font(.caption) }
-                    if model.settings.timestamps {
-                        Text(msg.ts, style: .time).font(.caption2).foregroundStyle(.secondary)
-                    }
                     if msg.mine && msg.delivered {
                         Text("Delivered").font(.caption2).foregroundStyle(.secondary)
                     }

@@ -1127,6 +1127,8 @@ public enum FfiEvent {
     )
     case contactRemoved(contactId: Int64
     )
+    case contactUpdated(contact: FfiContact
+    )
     case peerJoined(contactId: Int64
     )
     case received(contactId: Int64, msg: FfiMsg
@@ -1165,22 +1167,25 @@ public struct FfiConverterTypeFfiEvent: FfiConverterRustBuffer {
         case 3: return .contactRemoved(contactId: try FfiConverterInt64.read(from: &buf)
         )
         
-        case 4: return .peerJoined(contactId: try FfiConverterInt64.read(from: &buf)
+        case 4: return .contactUpdated(contact: try FfiConverterTypeFfiContact.read(from: &buf)
         )
         
-        case 5: return .received(contactId: try FfiConverterInt64.read(from: &buf), msg: try FfiConverterTypeFfiMsg.read(from: &buf)
+        case 5: return .peerJoined(contactId: try FfiConverterInt64.read(from: &buf)
         )
         
-        case 6: return .delivered(contactId: try FfiConverterInt64.read(from: &buf), wireId: try FfiConverterString.read(from: &buf)
+        case 6: return .received(contactId: try FfiConverterInt64.read(from: &buf), msg: try FfiConverterTypeFfiMsg.read(from: &buf)
         )
         
-        case 7: return .reaction(contactId: try FfiConverterInt64.read(from: &buf), refId: try FfiConverterString.read(from: &buf), emoji: try FfiConverterString.read(from: &buf)
+        case 7: return .delivered(contactId: try FfiConverterInt64.read(from: &buf), wireId: try FfiConverterString.read(from: &buf)
         )
         
-        case 8: return .history(contactId: try FfiConverterInt64.read(from: &buf), msgs: try FfiConverterSequenceTypeFfiMsg.read(from: &buf)
+        case 8: return .reaction(contactId: try FfiConverterInt64.read(from: &buf), refId: try FfiConverterString.read(from: &buf), emoji: try FfiConverterString.read(from: &buf)
         )
         
-        case 9: return .errorEvent(message: try FfiConverterString.read(from: &buf)
+        case 9: return .history(contactId: try FfiConverterInt64.read(from: &buf), msgs: try FfiConverterSequenceTypeFfiMsg.read(from: &buf)
+        )
+        
+        case 10: return .errorEvent(message: try FfiConverterString.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -1206,38 +1211,43 @@ public struct FfiConverterTypeFfiEvent: FfiConverterRustBuffer {
             FfiConverterInt64.write(contactId, into: &buf)
             
         
-        case let .peerJoined(contactId):
+        case let .contactUpdated(contact):
             writeInt(&buf, Int32(4))
+            FfiConverterTypeFfiContact.write(contact, into: &buf)
+            
+        
+        case let .peerJoined(contactId):
+            writeInt(&buf, Int32(5))
             FfiConverterInt64.write(contactId, into: &buf)
             
         
         case let .received(contactId,msg):
-            writeInt(&buf, Int32(5))
+            writeInt(&buf, Int32(6))
             FfiConverterInt64.write(contactId, into: &buf)
             FfiConverterTypeFfiMsg.write(msg, into: &buf)
             
         
         case let .delivered(contactId,wireId):
-            writeInt(&buf, Int32(6))
+            writeInt(&buf, Int32(7))
             FfiConverterInt64.write(contactId, into: &buf)
             FfiConverterString.write(wireId, into: &buf)
             
         
         case let .reaction(contactId,refId,emoji):
-            writeInt(&buf, Int32(7))
+            writeInt(&buf, Int32(8))
             FfiConverterInt64.write(contactId, into: &buf)
             FfiConverterString.write(refId, into: &buf)
             FfiConverterString.write(emoji, into: &buf)
             
         
         case let .history(contactId,msgs):
-            writeInt(&buf, Int32(8))
+            writeInt(&buf, Int32(9))
             FfiConverterInt64.write(contactId, into: &buf)
             FfiConverterSequenceTypeFfiMsg.write(msgs, into: &buf)
             
         
         case let .errorEvent(message):
-            writeInt(&buf, Int32(9))
+            writeInt(&buf, Int32(10))
             FfiConverterString.write(message, into: &buf)
             
         }

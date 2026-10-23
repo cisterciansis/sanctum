@@ -290,6 +290,8 @@ pub enum Event {
     TimerChanged { contact_id: i64, secs: u64 },
     Unsent { contact_id: i64, wire_id: String },
     ContactRemoved { contact_id: i64 },
+    /// Contact/group state changed (e.g. a group seat was claimed).
+    ContactUpdated(Contact),
     /// Authoritative reload of one chat's history (after a clear).
     History { contact_id: i64, msgs: Vec<StoredMsg> },
     Error(String),
@@ -378,7 +380,8 @@ pub fn spawn_worker(
                                 gl.group.members.push((seat, pk));
                                 // Mutual discovery: tell the newcomer who we are.
                                 gl.announce_to(&[seat]);
-                                let _ = events.send(Event::PeerJoined { contact_id: gid });
+                                let _ =
+                                    events.send(Event::ContactUpdated(group_as_contact(&gl.group)));
                             }
                         }
                         GroupItem::Message { seat, id, text } => {
@@ -444,7 +447,26 @@ fn group_as_contact(g: &crate::store::Group) -> Contact {
         // "waiting" in the UI means no peer has joined yet.
         peer_pk: if g.members.len() > 1 { "joined".into() } else { String::new() },
         endpoint: g.endpoint.clone(),
-        invite_link: g.invite_links.clone(),
+        invite_link: open_seat_links(g),
+    }
+}
+
+/// Creator's seat links with claimed seats blanked (line n is seat n+1, so
+/// labels stay stable); empty string once every seat is claimed.
+fn open_seat_links(g: &crate::store::Group) -> String {
+    let lines: Vec<&str> = g
+        .invite_links
+        .split('\n')
+        .enumerate()
+        .map(|(n, l)| {
+            let seat = n as i64 + 1;
+            if g.members.iter().any(|(s, _)| *s == seat) { "" } else { l }
+        })
+        .collect();
+    if lines.iter().all(|l| l.is_empty()) {
+        String::new()
+    } else {
+        lines.join("\n")
     }
 }
 
@@ -508,6 +530,11 @@ fn handle_cmd(
             }
         }
         Cmd::AcceptInvite { link, name } if link.trim().starts_with(SCHEME_G1) => {
+            if let Ok(inv) = GroupInvite::from_link(&link) {
+                if groups.iter().any(|g| g.group.gid == inv.gid && g.group.my_seat == inv.seat) {
+                    return send_err("You've already joined with this invite".into());
+                }
+            }
             match accept_group(&link, me) {
                 Ok(mut group) => match store.add_group(&group) {
                     Ok(id) => {
@@ -530,6 +557,13 @@ fn handle_cmd(
                 },
                 Err(e) => send_err(e),
             }
+        }
+        Cmd::AcceptInvite { link, .. }
+            if Invite2::from_link(&link)
+                .map(|inv| live.iter().any(|l| l.contact.bucket_out == inv.to_inviter))
+                .unwrap_or(false) =>
+        {
+            send_err("You've already joined with this invite".into())
         }
         Cmd::AcceptInvite { link, name } => match accept_invite(&link, me, &name) {
             Ok(mut contact) => match store.add_contact(&contact) {

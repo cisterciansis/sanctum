@@ -22,6 +22,15 @@ struct ChatVM: Identifiable {
     var inviteLink: String
     var msgs: [MsgVM]
     var unread: Int
+
+    /// Seat links still unclaimed (claimed group seats arrive as blank lines,
+    /// keeping "Member N" labels stable). Empty once everyone has joined.
+    var openInvites: [(n: Int, link: String)] {
+        inviteLink.split(separator: "\n", omittingEmptySubsequences: false)
+            .enumerated()
+            .compactMap { n, l in l.isEmpty ? nil : (n, String(l)) }
+    }
+    var isGroupInvite: Bool { inviteLink.contains("\n") }
 }
 
 struct MsgVM: Identifiable {
@@ -101,6 +110,11 @@ final class AppModel: ObservableObject {
                     inviteLink: c.inviteLink, msgs: [], unread: 0
                 ))
                 selected = c.id
+            case .contactUpdated(let c):
+                if let i = idx(c.id) {
+                    chats[i].waiting = c.waiting
+                    chats[i].inviteLink = c.inviteLink
+                }
             case .contactRemoved(let id):
                 chats.removeAll { $0.id == id }
                 if selected == id { selected = nil }

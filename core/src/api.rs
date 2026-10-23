@@ -52,6 +52,7 @@ pub enum FfiEvent {
     Snapshot { chats: Vec<FfiContact> },
     ContactAdded { contact: FfiContact },
     ContactRemoved { contact_id: i64 },
+    ContactUpdated { contact: FfiContact },
     PeerJoined { contact_id: i64 },
     Received { contact_id: i64, msg: FfiMsg },
     Delivered { contact_id: i64, wire_id: String },
@@ -120,6 +121,14 @@ impl Client {
                     },
                 },
                 Event::ContactRemoved { contact_id } => FfiEvent::ContactRemoved { contact_id },
+                Event::ContactUpdated(c) => FfiEvent::ContactUpdated {
+                    contact: FfiContact {
+                        id: c.id,
+                        name: c.name,
+                        waiting: c.peer_pk.is_empty(),
+                        invite_link: c.invite_link,
+                    },
+                },
                 Event::PeerJoined { contact_id } => FfiEvent::PeerJoined { contact_id },
                 Event::Received { contact_id, msg } => {
                     FfiEvent::Received { contact_id, msg: msg.into() }

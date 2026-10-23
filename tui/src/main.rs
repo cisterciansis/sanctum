@@ -182,6 +182,12 @@ impl App {
                         c.msgs = msgs.into_iter().map(Msg::from_stored).collect();
                     }
                 }
+                Event::ContactUpdated(c) => {
+                    if let Some(chat) = self.chat_by_id(c.id) {
+                        chat.waiting = c.peer_pk.is_empty();
+                        chat.invite_link = c.invite_link;
+                    }
+                }
                 Event::ContactRemoved { contact_id } => {
                     self.chats.retain(|c| c.id != contact_id);
                     if self.selected >= self.chats.len() {
@@ -203,6 +209,7 @@ impl App {
         }
         // Pasting an invite joins it.
         if text.starts_with("sanctum://v2/") || text.starts_with("sanctum://g1/") {
+            self.inviting = true;
             let n = self.chats.len();
             let _ = self
                 .outbound
@@ -389,12 +396,15 @@ impl App {
         let width = body.width.saturating_sub(2) as usize;
         let mut lines: Vec<Line> = Vec::new();
         if let Some(c) = self.chats.get(self.selected) {
-            if c.waiting && !c.invite_link.is_empty() {
+            if !c.invite_link.trim().is_empty() {
                 lines.push(Line::from(Span::styled(
                     " Waiting for them to join. Send this invite link:",
                     Style::default().fg(Color::Yellow),
                 )));
                 for (n, one) in c.invite_link.split('\n').enumerate() {
+                    if one.is_empty() {
+                        continue; // seat already claimed
+                    }
                     if c.invite_link.contains('\n') {
                         lines.push(Line::from(Span::styled(
                             format!(" Member {}:", n + 2),
