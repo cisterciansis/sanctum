@@ -131,7 +131,11 @@ final class AppModel: ObservableObject {
 
     func sendFile(_ data: Data, suggestedName: String) {
         guard let sel = selected, let i = idx(sel) else { return }
-        let dir = FileManager.default.temporaryDirectory
+        // Documents, not tmp: iOS clears tmp between launches, which would
+        // break the local preview after a restart.
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let dir = docs.appendingPathComponent("attachments", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let name = suggestedName.isEmpty ? "photo.jpg" : suggestedName
         let url = dir.appendingPathComponent("\(UUID().uuidString)-\(name)")
         do {

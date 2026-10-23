@@ -257,6 +257,8 @@ struct ChatView: View {
     @State private var photoItem: PhotosPickerItem?
     @State private var showPhotoPicker = false
     @State private var showFileImporter = false
+    @State private var showRename = false
+    @State private var renameText = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -354,6 +356,46 @@ struct ChatView: View {
         }
         .navigationTitle(chat.name)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Button {
+                        renameText = chat.name
+                        showRename = true
+                    } label: {
+                        Label("Rename", systemImage: "pencil")
+                    }
+                    if chat.waiting && !chat.inviteLink.isEmpty {
+                        Button {
+                            UIPasteboard.general.string = chat.inviteLink
+                        } label: {
+                            Label("Copy Invite Link", systemImage: "link")
+                        }
+                        ShareLink(item: chat.inviteLink) {
+                            Label("Share Invite", systemImage: "square.and.arrow.up")
+                        }
+                    }
+                    Button {
+                        model.clearHistory(chat.id, olderThanSecs: nil)
+                    } label: {
+                        Label("Clear History", systemImage: "eraser")
+                    }
+                    Divider()
+                    Button(role: .destructive) {
+                        model.deleteChat(chat.id)
+                    } label: {
+                        Label("Delete Chat", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+            }
+        }
+        .alert("Rename chat", isPresented: $showRename) {
+            TextField("Name", text: $renameText)
+            Button("Save") { model.rename(chat.id, to: renameText) }
+            Button("Cancel", role: .cancel) {}
+        }
     }
 }
 
