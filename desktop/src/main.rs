@@ -387,6 +387,9 @@ impl ChatApp {
     }
 
     fn sidebar(&mut self, p: &Pal, accent: u32, cx: &mut Context<Self>) -> Div {
+        // Hover chip for row controls: must contrast with BOTH row states
+        // (hover and selected), which p.hover/p.selected cannot.
+        let chip_hover: u32 = if self.settings.theme == "dark" { 0x505053 } else { 0xCFCFD4 };
         let mut col = v_flex()
             .w(px(172.))
             .h_full()
@@ -443,10 +446,14 @@ impl ChatApp {
             let dots = div()
                 .id(("chat-menu-btn", i))
                 .cursor_pointer()
-                .px_1()
-                .rounded_sm()
+                .w(px(20.))
+                .h(px(20.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_md()
                 .text_color(rgb(p.sub))
-                .hover(|d| d.bg(rgb(p.selected)))
+                .hover(move |d| d.bg(rgb(chip_hover)))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     // The row's own click handler would immediately close it.
                     cx.stop_propagation();
