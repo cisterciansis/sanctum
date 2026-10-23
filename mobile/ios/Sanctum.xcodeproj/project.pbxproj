@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		03DFBA15C5D6A5B6904576EF /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 20D882FECEBA461D22FFAB95 /* Assets.xcassets */; };
 		214035AEA77DC22285C4EAEB /* SanctumApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5EBEB4EED7822BA38A7789B /* SanctumApp.swift */; };
 		2E338BDA63BD758AD913AA64 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 616F6AC98B07E5EA3DE3E8C4 /* ContentView.swift */; };
 		FA245B8BD222E22036729809 /* sanctum_core.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A278737BDD502296443A3DF /* sanctum_core.swift */; };
@@ -14,6 +15,7 @@
 
 /* Begin PBXFileReference section */
 		1B13BD21AFA649944971293E /* sanctum_coreFFI.modulemap */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.module-map"; path = sanctum_coreFFI.modulemap; sourceTree = "<group>"; };
+		20D882FECEBA461D22FFAB95 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		363CF622B496E6BFE9C51596 /* sanctum_coreFFI.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = sanctum_coreFFI.h; sourceTree = "<group>"; };
 		45DC6F29EDF26C607C64FD32 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		5A278737BDD502296443A3DF /* sanctum_core.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = sanctum_core.swift; sourceTree = "<group>"; };
@@ -44,6 +46,7 @@
 		DA5525737AB45E226D9190F8 /* Sanctum */ = {
 			isa = PBXGroup;
 			children = (
+				20D882FECEBA461D22FFAB95 /* Assets.xcassets */,
 				872042FFF619C23367F3E8D5 /* Bridging.h */,
 				616F6AC98B07E5EA3DE3E8C4 /* ContentView.swift */,
 				45DC6F29EDF26C607C64FD32 /* Info.plist */,
@@ -70,6 +73,7 @@
 			buildConfigurationList = FF91AF5942C93D789F5230B1 /* Build configuration list for PBXNativeTarget "Sanctum" */;
 			buildPhases = (
 				4C16C53C619B36E652173FFF /* Sources */,
+				45CAD7D7F1BF7195E2D4088A /* Resources */,
 			);
 			buildRules = (
 			);
@@ -111,6 +115,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		45CAD7D7F1BF7195E2D4088A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				03DFBA15C5D6A5B6904576EF /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		4C16C53C619B36E652173FFF /* Sources */ = {
