@@ -602,15 +602,33 @@ impl ChatApp {
                         ),
                     );
                 if let Some(link) = pending_link {
-                    menu = menu.child(
-                        item("Copy invite link", false, p.text, p.hover)
-                            .id(("m-copy", i))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(link.clone()));
-                                this.chat_menu_for = None;
-                                cx.notify();
-                            })),
-                    );
+                    let links: Vec<String> = link.split('\n').map(str::to_string).collect();
+                    let many = links.len() > 1;
+                    for (n, one) in links.into_iter().enumerate() {
+                        let label = if many {
+                            format!("Copy Member {} invite", n + 2)
+                        } else {
+                            "Copy invite link".to_string()
+                        };
+                        menu = menu.child(
+                            div()
+                                .cursor_pointer()
+                                .w_full()
+                                .px_2()
+                                .py_1()
+                                .rounded_sm()
+                                .text_sm()
+                                .text_color(rgb(p.text))
+                                .hover(move |d| d.bg(rgb(p.hover)))
+                                .id(("m-copy", i * 10 + n))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(one.clone()));
+                                    this.chat_menu_for = None;
+                                    cx.notify();
+                                }))
+                                .child(label),
+                        );
+                    }
                 }
                 menu = menu
                     .child(

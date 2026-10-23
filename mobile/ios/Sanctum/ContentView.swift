@@ -40,10 +40,23 @@ struct ContentView: View {
                                 Label("Rename", systemImage: "pencil")
                             }
                             if chat.waiting && !chat.inviteLink.isEmpty {
-                                Button {
-                                    UIPasteboard.general.string = chat.inviteLink
-                                } label: {
-                                    Label("Copy Invite Link", systemImage: "link")
+                                let links = chat.inviteLink.split(separator: "\n").map(String.init)
+                                if links.count == 1 {
+                                    Button {
+                                        UIPasteboard.general.string = links[0]
+                                    } label: {
+                                        Label("Copy Invite Link", systemImage: "link")
+                                    }
+                                } else {
+                                    Menu {
+                                        ForEach(Array(links.enumerated()), id: \.offset) { n, one in
+                                            Button("Member \(n + 2)") {
+                                                UIPasteboard.general.string = one
+                                            }
+                                        }
+                                    } label: {
+                                        Label("Copy Invite…", systemImage: "link")
+                                    }
                                 }
                             }
                             Button {
@@ -441,13 +454,26 @@ struct ChatView: View {
                         Label("Rename", systemImage: "pencil")
                     }
                     if chat.waiting && !chat.inviteLink.isEmpty {
-                        Button {
-                            UIPasteboard.general.string = chat.inviteLink
-                        } label: {
-                            Label("Copy Invite Link", systemImage: "link")
-                        }
-                        ShareLink(item: chat.inviteLink) {
-                            Label("Share Invite", systemImage: "square.and.arrow.up")
+                        let links = chat.inviteLink.split(separator: "\n").map(String.init)
+                        if links.count == 1 {
+                            Button {
+                                UIPasteboard.general.string = links[0]
+                            } label: {
+                                Label("Copy Invite Link", systemImage: "link")
+                            }
+                            ShareLink(item: links[0]) {
+                                Label("Share Invite", systemImage: "square.and.arrow.up")
+                            }
+                        } else {
+                            Menu {
+                                ForEach(Array(links.enumerated()), id: \.offset) { n, one in
+                                    Button("Member \(n + 2)") {
+                                        UIPasteboard.general.string = one
+                                    }
+                                }
+                            } label: {
+                                Label("Copy Invite…", systemImage: "link")
+                            }
                         }
                     }
                     if chat.id >= 0 {
