@@ -13,6 +13,32 @@ const SIGN_TTL: Duration = Duration::from_secs(300);
 pub struct Mailbox {
     bucket: Bucket,
     creds: Credentials,
+    agent: ureq::Agent,
+}
+
+/// Metadata-privacy toggle: set SANCTUM_PROXY to route every gateway request
+/// through a SOCKS5/HTTP proxy, e.g. Tor (socks5://127.0.0.1:9050) or a UR
+/// network proxy endpoint. Unset = direct.
+fn agent_from_env() -> Result<ureq::Agent, Error> {
+    let mut b = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(60))
+        .user_agent(concat!("sanctum/", env!("CARGO_PKG_VERSION")));
+    if let Ok(proxy) = std::env::var("SANCTUM_PROXY") {
+        let proxy = ureq::Proxy::new(&proxy)
+            .map_err(|e| Error::Transport(format!("bad SANCTUM_PROXY: {e}")))?;
+        b = b.proxy(proxy);
+    }
+    Ok(b.build())
+}
+
+
+/// Strip query strings (presigned signatures) from error text before logging.
+fn redact(e: impl std::fmt::Display) -> String {
+    let s = e.to_string();
+    match s.split_once('?') {
+        Some((head, _)) => format!("{head}?<redacted>"),
+        None => s,
+    }
 }
 
 impl Mailbox {
@@ -24,22 +50,26 @@ impl Mailbox {
             "decentralized".to_string(),
         )
         .map_err(|e| Error::Transport(e.to_string()))?;
-        Ok(Self { bucket, creds: Credentials::new(access_key, secret) })
+        Ok(Self {
+            bucket,
+            creds: Credentials::new(access_key, secret),
+            agent: agent_from_env()?,
+        })
     }
 
     pub fn put(&self, key: &str, body: &[u8]) -> Result<(), Error> {
         let url = self.bucket.put_object(Some(&self.creds), key).sign(SIGN_TTL);
-        ureq::put(url.as_str())
+        self.agent.put(url.as_str())
             .send_bytes(body)
-            .map_err(|e| Error::Transport(format!("put {key}: {e}")))?;
+            .map_err(|e| Error::Transport(format!("put {key}: {}", redact(e))))?;
         Ok(())
     }
 
     pub fn get(&self, key: &str) -> Result<Vec<u8>, Error> {
         let url = self.bucket.get_object(Some(&self.creds), key).sign(SIGN_TTL);
-        let resp = ureq::get(url.as_str())
+        let resp = self.agent.get(url.as_str())
             .call()
-            .map_err(|e| Error::Transport(format!("get {key}: {e}")))?;
+            .map_err(|e| Error::Transport(format!("get {key}: {}", redact(e))))?;
         let mut buf = Vec::new();
         resp.into_reader()
             .read_to_end(&mut buf)
@@ -49,9 +79,9 @@ impl Mailbox {
 
     pub fn delete(&self, key: &str) -> Result<(), Error> {
         let url = self.bucket.delete_object(Some(&self.creds), key).sign(SIGN_TTL);
-        ureq::delete(url.as_str())
+        self.agent.delete(url.as_str())
             .call()
-            .map_err(|e| Error::Transport(format!("delete {key}: {e}")))?;
+            .map_err(|e| Error::Transport(format!("delete {key}: {}", redact(e))))?;
         Ok(())
     }
 
@@ -60,9 +90,9 @@ impl Mailbox {
         let mut action = self.bucket.list_objects_v2(Some(&self.creds));
         action.with_prefix(prefix);
         let url = action.sign(SIGN_TTL);
-        let resp = ureq::get(url.as_str())
+        let resp = self.agent.get(url.as_str())
             .call()
-            .map_err(|e| Error::Transport(format!("list: {e}")))?;
+            .map_err(|e| Error::Transport(format!("list: {}", redact(e))))?;
         let xml = resp.into_string().map_err(|e| Error::Transport(e.to_string()))?;
         let parsed = rusty_s3::actions::ListObjectsV2::parse_response(&xml)
             .map_err(|e| Error::Transport(format!("list parse: {e}")))?;

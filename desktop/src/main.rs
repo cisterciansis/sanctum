@@ -19,7 +19,6 @@ struct Msg {
 }
 
 struct ChatApp {
-    role: String,
     peer: String,
     paired: bool,
     status: SharedString,
@@ -60,7 +59,7 @@ impl ChatApp {
         .detach();
 
         Self {
-            role,
+
             peer,
             paired: false,
             status: "connecting to Hippius…".into(),

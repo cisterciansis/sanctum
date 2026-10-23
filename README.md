@@ -52,6 +52,20 @@ SENDER_KEY=$SENDER_KEY SENDER_SECRET=$SENDER_SECRET \
 OWNER_KEY=$OWNER_KEY OWNER_SECRET=$OWNER_SECRET cargo run -p sanctum-cli demo
 ```
 
+## Metadata privacy: Tor / UR proxy
+
+The storage gateway only ever holds ciphertext, but it can see client IPs.
+Set `SANCTUM_PROXY` and every gateway request (all clients) is routed through
+a SOCKS5/HTTP proxy — no proxy, no silent fallback to direct:
+
+```sh
+brew install tor && tor   # local Tor SOCKS proxy on 9050
+SANCTUM_PROXY=socks5://127.0.0.1:9050 cargo run -p sanctum-cli demo
+```
+
+The same knob accepts a [UR network](https://ur.xyz) (Bittensor SN25 dVPN)
+proxy endpoint. Verified live through Tor: full E2E round-trip in ~4.5 s.
+
 ## Design
 
 Read [docs/SPEC-V2-DEADDROP.md](docs/SPEC-V2-DEADDROP.md). Short version: a
