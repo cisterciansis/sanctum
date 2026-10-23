@@ -16,16 +16,21 @@ pub struct Mailbox {
     agent: ureq::Agent,
 }
 
-/// Metadata-privacy toggle: set SANCTUM_PROXY to route every gateway request
-/// through a SOCKS5/HTTP proxy, e.g. Tor (socks5://127.0.0.1:9050) or a UR
-/// network proxy endpoint. Unset = direct.
+/// Metadata-privacy toggle: route every gateway request through a SOCKS5/HTTP
+/// proxy, e.g. Tor (socks5://127.0.0.1:9050) or a UR network proxy endpoint.
+/// SANCTUM_PROXY env overrides; otherwise the persisted Settings toggle; else
+/// direct.
 fn agent_from_env() -> Result<ureq::Agent, Error> {
     let mut b = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(60))
         .user_agent(concat!("sanctum/", env!("CARGO_PKG_VERSION")));
-    if let Ok(proxy) = std::env::var("SANCTUM_PROXY") {
+    let proxy_url = std::env::var("SANCTUM_PROXY").ok().or_else(|| {
+        let s = crate::demo::Settings::load();
+        s.proxy_enabled.then_some(s.proxy_url)
+    });
+    if let Some(proxy) = proxy_url {
         let proxy = ureq::Proxy::new(&proxy)
-            .map_err(|e| Error::Transport(format!("bad SANCTUM_PROXY: {e}")))?;
+            .map_err(|e| Error::Transport(format!("bad proxy setting: {e}")))?;
         b = b.proxy(proxy);
     }
     Ok(b.build())

@@ -9,6 +9,7 @@ use gpui_kit::assets::Assets;
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     input::{Input, InputEvent, InputState},
+    switch::Switch,
     *,
 };
 use gpui_kit::{prelude::FluentBuilder as _, *};
@@ -44,6 +45,7 @@ struct ChatApp {
     msgs: Vec<Msg>,
     next_id: u64,
     settings: Settings,
+    show_settings: bool,
     input_state: Entity<InputState>,
     outbound: std::sync::mpsc::Sender<Cmd>,
     events: std::sync::mpsc::Receiver<Event>,
@@ -86,6 +88,7 @@ impl ChatApp {
             msgs: Vec::new(),
             next_id: 0,
             settings: Settings::load(),
+            show_settings: false,
             input_state,
             outbound: out_tx,
             events: ev_rx,
@@ -151,16 +154,65 @@ impl Render for ChatApp {
                     .child(div().text_xs().text_color(rgb(0x8E8E93)).child(self.status.clone())),
             )
             .child(
-                // Settings: toggle timestamps (persisted).
-                Button::new("ts-toggle")
+                Button::new("settings-menu")
                     .ghost()
-                    .label("🕒")
+                    .label("⋯")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.settings.timestamps = !this.settings.timestamps;
-                        this.settings.save();
+                        this.show_settings = !this.show_settings;
                         cx.notify();
                     })),
             );
+
+        let settings_panel = if self.show_settings {
+            let row = |label: &str, hint: Option<&str>| {
+                let mut l = v_flex().flex_1().child(div().text_sm().child(label.to_string()));
+                if let Some(h) = hint {
+                    l = l.child(div().text_xs().text_color(rgb(0x8E8E93)).child(h.to_string()));
+                }
+                h_flex().w_full().items_center().gap_3().child(l)
+            };
+            Some(
+                v_flex()
+                    .w_full()
+                    .gap_3()
+                    .p_3()
+                    .bg(rgb(0xF5F5F7))
+                    .border_b_1()
+                    .border_color(rgb(0xDDDDDD))
+                    .child(
+                        row("Timestamps", None).child(
+                            Switch::new("set-ts").checked(self.settings.timestamps).on_click(
+                                cx.listener(|this, v: &bool, _, cx| {
+                                    this.settings.timestamps = *v;
+                                    this.settings.save();
+                                    cx.notify();
+                                }),
+                            ),
+                        ),
+                    )
+                    .child(
+                        row(
+                            "Route via proxy (Tor / UR)",
+                            Some(&format!("{} · applies on restart", self.settings.proxy_url)),
+                        )
+                        .child(
+                            Switch::new("set-proxy").checked(self.settings.proxy_enabled).on_click(
+                                cx.listener(|this, v: &bool, _, cx| {
+                                    this.settings.proxy_enabled = *v;
+                                    this.settings.save();
+                                    cx.notify();
+                                }),
+                            ),
+                        ),
+                    )
+                    .child(
+                        row("Typing indicators", Some("coming soon · off keeps traffic quiet"))
+                            .child(Switch::new("set-typing").checked(false).disabled(true)),
+                    ),
+            )
+        } else {
+            None
+        };
 
         let last_delivered = self.msgs.iter().rposition(|m| m.mine && m.delivered);
 
@@ -261,6 +313,7 @@ impl Render for ChatApp {
             .size_full()
             .bg(rgb(0xFFFFFF))
             .child(header)
+            .children(settings_panel)
             .child(messages)
             .child(composer)
     }

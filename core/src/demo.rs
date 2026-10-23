@@ -118,14 +118,32 @@ impl Session {
 }
 
 /// Client settings shared by GUI and TUI, persisted as JSON.
-#[derive(serde::Serialize, serde::Deserialize, Clone, Copy)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct Settings {
     pub timestamps: bool,
+    /// Route all gateway traffic through `proxy_url` (Tor, UR, any SOCKS5/HTTP
+    /// proxy). Applied when a session starts; SANCTUM_PROXY env overrides.
+    #[serde(default)]
+    pub proxy_enabled: bool,
+    #[serde(default = "default_proxy_url")]
+    pub proxy_url: String,
+    /// Not implemented yet; reserved so the toggle can ship in the UI.
+    #[serde(default)]
+    pub typing_indicators: bool,
+}
+
+fn default_proxy_url() -> String {
+    "socks5://127.0.0.1:9050".into()
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { timestamps: true }
+        Self {
+            timestamps: true,
+            proxy_enabled: false,
+            proxy_url: default_proxy_url(),
+            typing_indicators: false,
+        }
     }
 }
 

@@ -47,6 +47,7 @@ struct App {
     msgs: Vec<Msg>,
     next_id: u64,
     settings: Settings,
+    show_settings: bool,
     input: String,
     outbound: std::sync::mpsc::Sender<Cmd>,
     events: std::sync::mpsc::Receiver<Event>,
@@ -66,6 +67,7 @@ impl App {
             msgs: Vec::new(),
             next_id: 0,
             settings: Settings::load(),
+            show_settings: false,
             input: String::new(),
             outbound: out_tx,
             events: ev_rx,
@@ -117,7 +119,7 @@ impl App {
         ])
         .areas(f.area());
 
-        let hint = "enter send · ^U unsend · ^T times · esc quit";
+        let hint = "enter send · ^U unsend · ^S settings · esc quit";
         let title = Line::from(vec![
             Span::raw(" "),
             Span::raw(&self.peer).bold(),
@@ -135,6 +137,36 @@ impl App {
             Style::default().fg(if self.paired { Color::Green } else { Color::DarkGray }),
         ));
         f.render_widget(Paragraph::new(vec![title, sub]), header);
+
+        if self.show_settings {
+            let on = |b: bool| if b { "[on] " } else { "[off]" };
+            let rows = vec![
+                Line::raw(""),
+                Line::from(Span::raw("  Settings").bold()),
+                Line::raw(""),
+                Line::raw(format!("  1 · Timestamps            {}", on(self.settings.timestamps))),
+                Line::raw(format!(
+                    "  2 · Proxy (Tor / UR)      {}  {} · applies on restart",
+                    on(self.settings.proxy_enabled),
+                    self.settings.proxy_url
+                )),
+                Line::from(Span::styled(
+                    "  3 · Typing indicators     coming soon",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::raw(""),
+                Line::from(Span::styled(
+                    "  press 1/2 to toggle · esc to close",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+            f.render_widget(Paragraph::new(rows), body);
+            f.render_widget(
+                Paragraph::new("").block(Block::default().borders(Borders::ALL)),
+                composer,
+            );
+            return;
+        }
 
         let width = body.width.saturating_sub(2) as usize;
         let mut lines: Vec<Line> = Vec::new();
@@ -200,14 +232,26 @@ impl App {
             terminal.draw(|f| self.draw(f))?;
             if event::poll(Duration::from_millis(250))? {
                 if let TermEvent::Key(key) = event::read()? {
+                    if self.show_settings {
+                        match key.code {
+                            KeyCode::Esc | KeyCode::Char('q') => self.show_settings = false,
+                            KeyCode::Char('1') => {
+                                self.settings.timestamps = !self.settings.timestamps;
+                                self.settings.save();
+                            }
+                            KeyCode::Char('2') => {
+                                self.settings.proxy_enabled = !self.settings.proxy_enabled;
+                                self.settings.save();
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
                     match (key.code, key.modifiers) {
                         (KeyCode::Esc, _) => return Ok(()),
                         (KeyCode::Char('c'), KeyModifiers::CONTROL) => return Ok(()),
                         (KeyCode::Char('u'), KeyModifiers::CONTROL) => self.unsend_last(),
-                        (KeyCode::Char('t'), KeyModifiers::CONTROL) => {
-                            self.settings.timestamps = !self.settings.timestamps;
-                            self.settings.save();
-                        }
+                        (KeyCode::Char('s'), KeyModifiers::CONTROL) => self.show_settings = true,
                         (KeyCode::Enter, _) => self.send_current(),
                         (KeyCode::Backspace, _) => {
                             self.input.pop();
