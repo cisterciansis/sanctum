@@ -48,6 +48,16 @@ func toVM(_ m: FfiMsg) -> MsgVM {
     )
 }
 
+extension AppModel {
+    var colorScheme: ColorScheme? {
+        switch settings.theme {
+        case "dark": .dark
+        case "light": .light
+        default: nil
+        }
+    }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var chats: [ChatVM] = []

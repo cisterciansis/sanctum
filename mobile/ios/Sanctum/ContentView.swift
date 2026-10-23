@@ -132,10 +132,7 @@ struct ContentView: View {
         .sheet(isPresented: $showJoin) { JoinSheet() }
         .sheet(isPresented: $showSettings) { SettingsSheet() }
         .sheet(isPresented: $showNewGroup) { NewGroupSheet() }
-        .preferredColorScheme(
-            model.settings.theme == "dark" ? .dark
-                : model.settings.theme == "light" ? .light : nil
-        )
+        .preferredColorScheme(model.colorScheme)
         .alert("Rename chat", isPresented: Binding(
             get: { renaming != nil },
             set: { if !$0 { renaming = nil } }
@@ -213,6 +210,7 @@ struct JoinSheet: View {
                 }
             }
             .navigationTitle("Join a chat")
+            .preferredColorScheme(model.colorScheme)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -246,6 +244,7 @@ struct NewGroupSheet: View {
                 }
             }
             .navigationTitle("New Group")
+            .preferredColorScheme(model.colorScheme)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -313,6 +312,7 @@ struct SettingsSheet: View {
                 }
             }
             .navigationTitle("Settings")
+            .preferredColorScheme(model.colorScheme)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
