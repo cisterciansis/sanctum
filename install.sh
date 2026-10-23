@@ -44,7 +44,8 @@ if [ "$#" -ge 1 ]; then
   case "$1" in
     sanctum://v2/*)
       echo "joining invite…"
-      exec "$bin_dir/sanctum-tui" "$1"
+      # stdin is the curl pipe here; the TUI needs the real terminal.
+      exec "$bin_dir/sanctum-tui" "$1" < /dev/tty
       ;;
   esac
 fi

@@ -4,6 +4,11 @@
 //! write into one inbox bucket (a Hippius sub-token scoped to it) plus the
 //! recipient's public key. Senders need no account of any kind.
 
+#[cfg(feature = "ffi")]
+pub mod api;
+
+#[cfg(feature = "ffi")]
+uniffi::setup_scaffolding!();
 pub mod contact;
 pub mod demo;
 pub mod invite;

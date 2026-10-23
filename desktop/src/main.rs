@@ -137,6 +137,7 @@ struct ChatApp {
     inviting: bool,
     picker_for: Option<usize>,
     chat_menu_for: Option<usize>,
+    copied_at: Option<std::time::Instant>,
     input_state: Entity<InputState>,
     rename_state: Entity<InputState>,
     outbound: std::sync::mpsc::Sender<Cmd>,
@@ -185,6 +186,7 @@ impl ChatApp {
             inviting: false,
             picker_for: None,
             chat_menu_for: None,
+            copied_at: None,
             input_state,
             rename_state,
             outbound: out_tx,
@@ -284,6 +286,11 @@ impl ChatApp {
                     self.status = format!("error: {e}").into();
                 }
             }
+        }
+        // Auto-revert the "Copied" flash (the poll tick redraws us).
+        if self.copied_at.is_some_and(|t| t.elapsed().as_millis() > 1400) {
+            self.copied_at = None;
+            changed = true;
         }
         if changed {
             cx.notify();
@@ -948,26 +955,43 @@ impl Render for ChatApp {
                                     .overflow_hidden()
                                     .child(format!("{}…", &link[..link.len().min(44)])),
                             )
-                            .child(
-                                div()
+                            .child({
+                                let copied = self.copied_at.is_some();
+                                let btn = div()
                                     .id("copy-invite")
                                     .cursor_pointer()
                                     .px_3()
                                     .py_1()
                                     .rounded_md()
-                                    .bg(rgb(p.bg))
-                                    .border_1()
-                                    .border_color(rgb(p.border))
-                                    .hover(|d| d.bg(rgb(p.hover)))
                                     .text_sm()
-                                    .text_color(rgb(p.text))
-                                    .on_click(cx.listener(move |_, _, _, cx| {
+                                    .on_click(cx.listener(move |this, _, _, cx| {
                                         cx.write_to_clipboard(ClipboardItem::new_string(
                                             link.clone(),
                                         ));
-                                    }))
-                                    .child("Copy"),
-                            ),
+                                        this.copied_at = Some(std::time::Instant::now());
+                                        cx.notify();
+                                    }));
+                                if copied {
+                                    btn.border_1()
+                                        .border_color(rgb(accent))
+                                        .text_color(rgb(accent))
+                                        .child("Copied")
+                                        .with_animation(
+                                            "copied-pop",
+                                            Animation::new(Duration::from_millis(220)),
+                                            |d, delta| d.opacity(0.4 + 0.6 * delta),
+                                        )
+                                        .into_any_element()
+                                } else {
+                                    btn.bg(rgb(p.bg))
+                                        .border_1()
+                                        .border_color(rgb(p.border))
+                                        .hover(|d| d.bg(rgb(p.hover)))
+                                        .text_color(rgb(p.text))
+                                        .child("Copy")
+                                        .into_any_element()
+                                }
+                            }),
                     )
             });
 
