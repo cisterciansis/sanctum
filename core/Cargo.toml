@@ -1,0 +1,21 @@
+[package]
+name = "sanctum-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# MVP crypto: X25519 + XSalsa20-Poly1305 (audited RustCrypto).
+# Ceiling: no forward secrecy / PQ. Upgrade path: libsignal PQXDH + double
+# ratchet (git dep on signalapp/libsignal) before beta. Wire format already
+# carries a version byte for the swap.
+crypto_box = { version = "0.9", features = ["serde"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+rusty-s3 = "0.8"
+ureq = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+ulid = "1"
+thiserror = "2"
+percent-encoding = "2"
