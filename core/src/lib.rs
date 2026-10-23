@@ -7,6 +7,8 @@
 pub mod invite;
 pub mod transport;
 
+pub use crypto_box;
+
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64, Engine};
 use crypto_box::{
     aead::{Aead, AeadCore, OsRng},
