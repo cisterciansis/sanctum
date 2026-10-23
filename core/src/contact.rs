@@ -272,6 +272,9 @@ pub enum Cmd {
     /// Remove a chat: retire its buckets (when a provisioning token exists)
     /// and delete it with its history from the store.
     DeleteContact { contact_id: i64 },
+    /// Clear local history: all of it, or only messages older than
+    /// `older_than_secs`.
+    ClearHistory { contact_id: i64, older_than_secs: Option<u64> },
 }
 
 pub enum Event {
@@ -285,6 +288,8 @@ pub enum Event {
     TimerChanged { contact_id: i64, secs: u64 },
     Unsent { contact_id: i64, wire_id: String },
     ContactRemoved { contact_id: i64 },
+    /// Authoritative reload of one chat's history (after a clear).
+    History { contact_id: i64, msgs: Vec<StoredMsg> },
     Error(String),
 }
 
@@ -475,6 +480,12 @@ fn handle_cmd(
             }
             let _ = store.delete_contact(contact_id);
             let _ = events.send(Event::ContactRemoved { contact_id });
+        }
+        Cmd::ClearHistory { contact_id, older_than_secs } => {
+            let before = older_than_secs.map(|s| crate::store::chrono_now_ms() - (s as i64) * 1000);
+            let _ = store.clear_history(contact_id, before);
+            let msgs = store.messages(contact_id).unwrap_or_default();
+            let _ = events.send(Event::History { contact_id, msgs });
         }
         Cmd::Unsend { contact_id, wire_id } => {
             let Some(l) = live.iter_mut().find(|l| l.contact.id == contact_id) else { return };

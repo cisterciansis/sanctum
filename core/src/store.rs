@@ -250,6 +250,24 @@ impl Store {
         Ok(())
     }
 
+    /// Clear a chat's local history: everything, or only messages older
+    /// than `before_ms` when given.
+    pub fn clear_history(&self, contact_id: i64, before_ms: Option<i64>) -> Result<usize, Error> {
+        match before_ms {
+            Some(ts) => self
+                .conn
+                .execute(
+                    "DELETE FROM messages WHERE contact_id = ?1 AND ts_ms < ?2",
+                    rusqlite::params![contact_id, ts],
+                )
+                .map_err(|e| Error::Crypto(e.to_string())),
+            None => self
+                .conn
+                .execute("DELETE FROM messages WHERE contact_id = ?1", rusqlite::params![contact_id])
+                .map_err(|e| Error::Crypto(e.to_string())),
+        }
+    }
+
     /// Delete messages older than `secs` (disappearing messages).
     pub fn purge_older_than(&self, secs: u64) -> Result<usize, Error> {
         let cutoff = chrono_now_ms() - (secs as i64) * 1000;

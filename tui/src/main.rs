@@ -167,6 +167,11 @@ impl App {
                         c.msgs.retain(|m| m.wire_id != wire_id);
                     }
                 }
+                Event::History { contact_id, msgs } => {
+                    if let Some(c) = self.chat_by_id(contact_id) {
+                        c.msgs = msgs.into_iter().map(Msg::from_stored).collect();
+                    }
+                }
                 Event::ContactRemoved { contact_id } => {
                     self.chats.retain(|c| c.id != contact_id);
                     if self.selected >= self.chats.len() {
@@ -199,6 +204,12 @@ impl App {
             self.status = "no chat selected — Ctrl-N to invite someone".into();
             return;
         };
+        if text == "/clear" || text == "/clearweek" {
+            let older = (text == "/clearweek").then_some(7 * 86400);
+            let _ = self.outbound.send(Cmd::ClearHistory { contact_id: sel, older_than_secs: older });
+            self.input.clear();
+            return;
+        }
         if let Some(name) = text.strip_prefix("/name ") {
             let name = name.trim().to_string();
             if !name.is_empty() {

@@ -136,6 +136,7 @@ struct ChatApp {
     show_sidebar: bool,
     inviting: bool,
     picker_for: Option<usize>,
+    chat_menu_for: Option<usize>,
     input_state: Entity<InputState>,
     rename_state: Entity<InputState>,
     outbound: std::sync::mpsc::Sender<Cmd>,
@@ -183,6 +184,7 @@ impl ChatApp {
             show_sidebar: true,
             inviting: false,
             picker_for: None,
+            chat_menu_for: None,
             input_state,
             rename_state,
             outbound: out_tx,
@@ -226,7 +228,13 @@ impl ChatApp {
                     });
                     self.selected = self.chats.len() - 1;
                 }
+                Event::History { contact_id, msgs } => {
+                    if let Some(c) = self.chat_by_id(contact_id) {
+                        c.msgs = msgs.into_iter().map(Msg::from_stored).collect();
+                    }
+                }
                 Event::ContactRemoved { contact_id } => {
+                    self.chat_menu_for = None;
                     self.chats.retain(|c| c.id != contact_id);
                     if self.selected >= self.chats.len() {
                         self.selected = self.chats.len().saturating_sub(1);
@@ -432,6 +440,19 @@ impl ChatApp {
             } else {
                 None
             };
+            let dots = div()
+                .id(("chat-menu-btn", i))
+                .cursor_pointer()
+                .px_1()
+                .rounded_sm()
+                .text_color(rgb(p.sub))
+                .hover(|d| d.bg(rgb(p.selected)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.chat_menu_for =
+                        if this.chat_menu_for == Some(i) { None } else { Some(i) };
+                    cx.notify();
+                }))
+                .child("⋯");
             let row = h_flex()
                 .id(("chat", i))
                 .cursor_pointer()
@@ -448,14 +469,106 @@ impl ChatApp {
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.selected = i;
                     this.picker_for = None;
+                    this.chat_menu_for = None;
                     if let Some(c) = this.chats.get_mut(i) {
                         c.unread = 0;
                     }
                     cx.notify();
                 }))
                 .child(c.name.clone())
-                .children(trailing);
+                .child(h_flex().gap_1().items_center().children(trailing).child(dots));
             col = col.child(row);
+
+            if self.chat_menu_for == Some(i) {
+                let id = c.id;
+                let pending_link =
+                    (c.waiting && !c.invite_link.is_empty()).then(|| c.invite_link.clone());
+                let item = |label: &str, danger: bool, pal_text: u32, pal_hover: u32| {
+                    div()
+                        .cursor_pointer()
+                        .w_full()
+                        .px_2()
+                        .py_1()
+                        .rounded_sm()
+                        .text_sm()
+                        .text_color(rgb(if danger { 0xFF453A } else { pal_text }))
+                        .hover(move |d| d.bg(rgb(pal_hover)))
+                        .child(label.to_string())
+                };
+                let mut menu = v_flex()
+                    .w_full()
+                    .my_1()
+                    .p_1()
+                    .rounded_md()
+                    .bg(rgb(p.bg))
+                    .border_1()
+                    .border_color(rgb(p.border))
+                    .child(
+                        item("Rename", false, p.text, p.hover).id(("m-rename", i)).on_click(
+                            cx.listener(move |this, _, window, cx| {
+                                this.selected = i;
+                                this.chat_menu_for = None;
+                                this.show_chat_info = true;
+                                this.show_settings = false;
+                                let name = this
+                                    .chats
+                                    .get(i)
+                                    .map(|c| c.name.to_string())
+                                    .unwrap_or_default();
+                                this.rename_state
+                                    .update(cx, |s, cx| s.set_value(&name, window, cx));
+                                cx.notify();
+                            }),
+                        ),
+                    );
+                if let Some(link) = pending_link {
+                    menu = menu.child(
+                        item("Copy invite link", false, p.text, p.hover)
+                            .id(("m-copy", i))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(link.clone()));
+                                this.chat_menu_for = None;
+                                cx.notify();
+                            })),
+                    );
+                }
+                menu = menu
+                    .child(
+                        item("Clear history", false, p.text, p.hover)
+                            .id(("m-clear", i))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let _ = this.outbound.send(Cmd::ClearHistory {
+                                    contact_id: id,
+                                    older_than_secs: None,
+                                });
+                                this.chat_menu_for = None;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        item("Clear older than a week", false, p.text, p.hover)
+                            .id(("m-clear-week", i))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let _ = this.outbound.send(Cmd::ClearHistory {
+                                    contact_id: id,
+                                    older_than_secs: Some(7 * 86400),
+                                });
+                                this.chat_menu_for = None;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        item("Delete chat", true, p.text, p.hover)
+                            .id(("m-delete", i))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let _ =
+                                    this.outbound.send(Cmd::DeleteContact { contact_id: id });
+                                this.chat_menu_for = None;
+                                cx.notify();
+                            })),
+                    );
+                col = col.child(menu);
+            }
         }
         let footer_settings = h_flex()
             .id("app-settings")
