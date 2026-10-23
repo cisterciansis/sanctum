@@ -413,6 +413,26 @@ pub fn spawn_worker(
     });
 }
 
+/// Strip the collision-safety prefix (uuid or ulid + '-') from a stored
+/// attachment filename for display.
+fn pretty_file_name(name: &str) -> String {
+    let is_uuid = |s: &str| {
+        s.len() == 36
+            && s.chars().enumerate().all(|(i, c)| match i {
+                8 | 13 | 18 | 23 => c == '-',
+                _ => c.is_ascii_hexdigit(),
+            })
+    };
+    let is_ulid = |s: &str| s.len() == 26 && s.chars().all(|c| c.is_ascii_alphanumeric());
+    if name.len() > 37 && is_uuid(&name[..36]) && name.as_bytes()[36] == b'-' {
+        return name[37..].to_string();
+    }
+    if name.len() > 27 && is_ulid(&name[..26]) && name.as_bytes()[26] == b'-' {
+        return name[27..].to_string();
+    }
+    name.to_string()
+}
+
 fn group_as_contact(g: &crate::store::Group) -> Contact {
     Contact {
         id: -g.id,
@@ -558,7 +578,7 @@ fn handle_cmd(
                         &StoredMsg {
                             wire_id: wire_id.clone(),
                             mine: true,
-                            text: name,
+                            text: pretty_file_name(&name),
                             file_path: Some(path),
                             ts_ms: crate::store::chrono_now_ms(),
                             delivered: false,
