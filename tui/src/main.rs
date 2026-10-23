@@ -46,6 +46,8 @@ impl Msg {
     }
 }
 
+const REACTIONS: [&str; 6] = ["👍", "👎", "❤️", "‼️", "❓", "😂"];
+
 struct App {
     peer: String,
     status: String,
@@ -54,6 +56,7 @@ struct App {
     next_id: u64,
     settings: Settings,
     show_settings: bool,
+    react_mode: bool,
     input: String,
     outbound: std::sync::mpsc::Sender<Cmd>,
     events: std::sync::mpsc::Receiver<Event>,
@@ -74,6 +77,7 @@ impl App {
             next_id: 0,
             settings: Settings::load(),
             show_settings: false,
+            react_mode: false,
             input: String::new(),
             outbound: out_tx,
             events: ev_rx,
@@ -148,16 +152,19 @@ impl App {
         }
     }
 
-    /// Heart the last received message.
-    fn react_last(&mut self) {
+    /// Apply the n-th tapback to the last received message.
+    fn react_last(&mut self, n: usize) {
+        let Some(emoji) = REACTIONS.get(n) else { return };
         if let Some(m) = self
             .msgs
             .iter_mut()
             .rev()
             .find(|m| !m.mine && !m.wire_id.is_empty())
         {
-            m.reaction = Some("❤️".into());
-            let _ = self.outbound.send(Cmd::React { ref_id: m.wire_id.clone(), emoji: "❤️".into() });
+            m.reaction = Some((*emoji).to_string());
+            let _ = self
+                .outbound
+                .send(Cmd::React { ref_id: m.wire_id.clone(), emoji: (*emoji).to_string() });
         }
     }
 
@@ -182,8 +189,21 @@ impl App {
                 Style::default().fg(Color::DarkGray),
             ),
         ]);
+        let status_line = if self.react_mode {
+            format!(
+                " react to last message: {}",
+                REACTIONS
+                    .iter()
+                    .enumerate()
+                    .map(|(i, e)| format!("{} {e}", i + 1))
+                    .collect::<Vec<_>>()
+                    .join("  ")
+            )
+        } else {
+            format!(" {}", self.status)
+        };
         let sub = Line::from(Span::styled(
-            format!(" {}", self.status),
+            status_line,
             Style::default().fg(if self.paired { Color::Green } else { Color::DarkGray }),
         ));
         f.render_widget(Paragraph::new(vec![title, sub]), header);
@@ -298,6 +318,16 @@ impl App {
             terminal.draw(|f| self.draw(f))?;
             if event::poll(Duration::from_millis(250))? {
                 if let TermEvent::Key(key) = event::read()? {
+                    if self.react_mode {
+                        match key.code {
+                            KeyCode::Char(c @ '1'..='6') => {
+                                self.react_last(c as usize - '1' as usize);
+                                self.react_mode = false;
+                            }
+                            _ => self.react_mode = false,
+                        }
+                        continue;
+                    }
                     if self.show_settings {
                         match key.code {
                             KeyCode::Esc | KeyCode::Char('q') => self.show_settings = false,
@@ -327,7 +357,7 @@ impl App {
                         (KeyCode::Esc, _) => return Ok(()),
                         (KeyCode::Char('c'), KeyModifiers::CONTROL) => return Ok(()),
                         (KeyCode::Char('u'), KeyModifiers::CONTROL) => self.unsend_last(),
-                        (KeyCode::Char('r'), KeyModifiers::CONTROL) => self.react_last(),
+                        (KeyCode::Char('r'), KeyModifiers::CONTROL) => self.react_mode = true,
                         (KeyCode::Char('s'), KeyModifiers::CONTROL) => self.show_settings = true,
                         (KeyCode::Enter, _) => self.send_current(),
                         (KeyCode::Backspace, _) => {

@@ -60,6 +60,8 @@ fn is_image(name: &str) -> bool {
         .any(|e| lower.ends_with(&format!(".{e}")))
 }
 
+const REACTIONS: [&str; 6] = ["👍", "👎", "❤️", "‼️", "❓", "😂"];
+
 struct ChatApp {
     peer: String,
     paired: bool,
@@ -68,6 +70,7 @@ struct ChatApp {
     next_id: u64,
     settings: Settings,
     show_settings: bool,
+    picker_for: Option<usize>,
     input_state: Entity<InputState>,
     outbound: std::sync::mpsc::Sender<Cmd>,
     events: std::sync::mpsc::Receiver<Event>,
@@ -111,6 +114,7 @@ impl ChatApp {
             next_id: 0,
             settings: Settings::load(),
             show_settings: false,
+            picker_for: None,
             input_state,
             outbound: out_tx,
             events: ev_rx,
@@ -394,17 +398,11 @@ impl Render for ChatApp {
                     .child(content)
                     .into_any_element()
             } else if reactable {
-                // Click a received bubble to tapback a heart.
+                // Click a received bubble to open the tapback picker.
                 bubble
                     .id(("msg", i))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        let _ = this.outbound.send(Cmd::React {
-                            ref_id: wire_id.clone(),
-                            emoji: "❤️".into(),
-                        });
-                        if let Some(m) = this.msgs.get_mut(i) {
-                            m.reaction = Some("❤️".into());
-                        }
+                        this.picker_for = if this.picker_for == Some(i) { None } else { Some(i) };
                         cx.notify();
                     }))
                     .child(content)
@@ -412,6 +410,40 @@ impl Render for ChatApp {
             } else {
                 bubble.child(content).into_any_element()
             };
+
+            // Tapback picker: iMessage-style pill above the bubble.
+            let picker = (self.picker_for == Some(i)).then(|| {
+                let mut pill = h_flex()
+                    .gap_2()
+                    .px_3()
+                    .py_1()
+                    .rounded_full()
+                    .bg(rgb(0xF2F2F7))
+                    .border_1()
+                    .border_color(rgb(0xDDDDDD));
+                for (n, emoji) in REACTIONS.iter().enumerate() {
+                    let wire_id = wire_id.clone();
+                    pill = pill.child(
+                        div()
+                            .id(("react", i * 10 + n))
+                            .cursor_pointer()
+                            .text_lg()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let _ = this.outbound.send(Cmd::React {
+                                    ref_id: wire_id.clone(),
+                                    emoji: (*emoji).into(),
+                                });
+                                if let Some(m) = this.msgs.get_mut(i) {
+                                    m.reaction = Some((*emoji).into());
+                                }
+                                this.picker_for = None;
+                                cx.notify();
+                            }))
+                            .child(*emoji),
+                    );
+                }
+                pill
+            });
 
             let mut row = h_flex().items_end().gap_1();
             row = if m.mine {
@@ -426,6 +458,7 @@ impl Render for ChatApp {
                 .w_full()
                 .when(m.mine, |d| d.items_end())
                 .when(!m.mine, |d| d.items_start())
+                .children(picker)
                 .child(row);
             if !caption.is_empty() {
                 col = col.child(
@@ -454,10 +487,13 @@ impl Render for ChatApp {
             .border_t_1()
             .border_color(rgb(0xDDDDDD))
             .child(
-                Button::new("attach")
-                    .ghost()
-                    .label("📎")
-                    .on_click(cx.listener(|this, _, _, cx| this.attach_file(cx))),
+                div()
+                    .id("attach")
+                    .cursor_pointer()
+                    .text_color(rgb(0x8E8E93))
+                    .text_lg()
+                    .on_click(cx.listener(|this, _, _, cx| this.attach_file(cx)))
+                    .child(gpui_kit::assets::IconName::CirclePlus),
             )
             .child(div().flex_1().child(Input::new(&self.input_state)))
             .child(

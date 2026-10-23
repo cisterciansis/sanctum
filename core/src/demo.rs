@@ -207,8 +207,11 @@ impl Incoming {
     }
 }
 
-/// Client settings shared by GUI and TUI, persisted as JSON.
+/// Client settings shared by GUI and TUI, persisted as JSON. The container
+/// default means a hand-written partial file (e.g. just hippius_api_token)
+/// still parses.
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[serde(default)]
 pub struct Settings {
     pub timestamps: bool,
     /// Route all gateway traffic through `proxy_url` (Tor, UR, any SOCKS5/HTTP
