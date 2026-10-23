@@ -12,6 +12,22 @@ fn keychain(name: &str) -> Result<keyring::Entry, Error> {
     keyring::Entry::new(SERVICE, name).map_err(|e| Error::Crypto(e.to_string()))
 }
 
+/// Dev mode: DB key in a 0600 file so unsigned rebuilds don't re-prompt.
+/// Migrates the existing keychain key on first use (one last prompt).
+fn dev_keyfile_secret(dir: &str) -> Result<String, Error> {
+    use std::os::unix::fs::PermissionsExt;
+    let path = format!("{dir}/db.key");
+    if let Ok(s) = std::fs::read_to_string(&path) {
+        return Ok(s.trim().to_string());
+    }
+    // Preserve the key an existing database was encrypted with.
+    let key = keychain_secret("db-key")?;
+    std::fs::write(&path, &key).map_err(|e| Error::Crypto(e.to_string()))?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| Error::Crypto(e.to_string()))?;
+    Ok(key)
+}
+
 /// Fetch-or-create a random secret in the keychain.
 fn keychain_secret(name: &str) -> Result<String, Error> {
     let entry = keychain(name)?;
@@ -72,7 +88,11 @@ impl Store {
         std::fs::create_dir_all(&dir).map_err(|e| Error::Crypto(e.to_string()))?;
         let conn = Connection::open(format!("{dir}/sanctum.db"))
             .map_err(|e| Error::Crypto(e.to_string()))?;
-        let key = keychain_secret("db-key")?;
+        let key = if crate::demo::Settings::load().dev_keyfile {
+            dev_keyfile_secret(&dir)?
+        } else {
+            keychain_secret("db-key")?
+        };
         conn.pragma_update(None, "key", &key).map_err(|e| Error::Crypto(e.to_string()))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS contacts (

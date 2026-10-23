@@ -232,6 +232,11 @@ pub struct Settings {
     /// per-contact buckets/sub-tokens and rotate queues.
     #[serde(default)]
     pub hippius_api_token: Option<String>,
+    /// Dev convenience: keep the DB key in a 0600 file instead of the OS
+    /// keychain, so unsigned dev rebuilds don't re-prompt on every launch.
+    /// Release builds are code-signed and should leave this false.
+    #[serde(default)]
+    pub dev_keyfile: bool,
     /// "light" or "dark".
     #[serde(default = "default_theme")]
     pub theme: String,
@@ -261,6 +266,7 @@ impl Default for Settings {
             typing_indicators: false,
             disappear_secs: 0,
             hippius_api_token: None,
+            dev_keyfile: false,
             theme: default_theme(),
             accent: default_accent(),
         }

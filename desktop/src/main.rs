@@ -386,13 +386,11 @@ impl ChatApp {
             .child(
                 h_flex()
                     .w_full()
+                    // Same fixed height as the main header: centers align exactly.
+                    .h(px(48.))
                     .items_center()
                     .justify_between()
                     .px_1()
-                    // Must match the main header's pt_3/pb_2 so the + and the
-                    // sidebar toggle sit on the same line.
-                    .pt_3()
-                    .pb_2()
                     .child(div().text_sm().font_semibold().text_color(rgb(p.text)).child("Chats"))
                     .child(
                         div()
@@ -510,9 +508,8 @@ impl Render for ChatApp {
 
         let header = h_flex()
             .w_full()
+            .h(px(48.))
             .items_center()
-            .pt_3()
-            .pb_2()
             .px_3()
             .border_b_1()
             .border_color(rgb(p.border))
