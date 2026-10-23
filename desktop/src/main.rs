@@ -380,7 +380,8 @@ impl ChatApp {
             .bg(rgb(p.surface))
             .border_r_1()
             .border_color(rgb(p.border))
-            .p_2()
+            .px_2()
+            .pb_2()
             .gap_1()
             .child(
                 h_flex()
@@ -388,19 +389,22 @@ impl ChatApp {
                     .items_center()
                     .justify_between()
                     .px_1()
-                    .pb_1()
+                    // Must match the main header's pt_3/pb_2 so the + and the
+                    // sidebar toggle sit on the same line.
+                    .pt_3()
+                    .pb_2()
                     .child(div().text_sm().font_semibold().text_color(rgb(p.text)).child("Chats"))
                     .child(
                         div()
                             .id("new-invite")
                             .cursor_pointer()
-                            .w(px(22.))
-                            .h(px(22.))
-                            .rounded_full()
+                            .w(px(24.))
+                            .h(px(24.))
+                            .rounded_md()
                             .hover(|d| d.bg(rgb(p.hover)))
                             .relative()
                             .on_click(cx.listener(|this, _, _, cx| this.new_invite(cx)))
-                            .children(Self::plus_glyph(p.sub, 22.)),
+                            .children(Self::plus_glyph(p.sub, 24.)),
                     ),
             );
         if self.chats.is_empty() && !self.inviting {
