@@ -78,6 +78,7 @@ struct Msg {
     reaction: Option<SharedString>,
     text: SharedString,
     file: Option<(SharedString, String)>,
+    sender_seat: Option<i64>,
     time: SharedString,
     day: String,
 }
@@ -92,6 +93,7 @@ impl Msg {
             reaction: m.reaction.map(Into::into),
             text: m.text.clone().into(),
             file: m.file_path.map(|p| (m.text.into(), p)),
+            sender_seat: m.sender_seat,
             time: ts.format("%-I:%M %p").to_string().into(),
             day: ts.format("%A, %b %-d").to_string(),
         }
@@ -106,6 +108,7 @@ impl Msg {
             reaction: None,
             text: text.into(),
             file: file.map(|(n, p)| (n.into(), p)),
+            sender_seat: None,
             time: now.format("%-I:%M %p").to_string().into(),
             day: now.format("%A, %b %-d").to_string(),
         }
@@ -136,6 +139,8 @@ struct ChatApp {
     show_sidebar: bool,
     show_plus_menu: bool,
     show_join: bool,
+    show_group: bool,
+    group_size: i64,
     inviting: bool,
     picker_for: Option<usize>,
     chat_menu_for: Option<usize>,
@@ -143,6 +148,7 @@ struct ChatApp {
     input_state: Entity<InputState>,
     rename_state: Entity<InputState>,
     join_state: Entity<InputState>,
+    group_state: Entity<InputState>,
     outbound: std::sync::mpsc::Sender<Cmd>,
     events: std::sync::mpsc::Receiver<Event>,
     _subscriptions: Vec<Subscription>,
@@ -161,6 +167,7 @@ impl ChatApp {
         let input_state = cx.new(|cx| InputState::new(window, cx).placeholder("Sanctum"));
         let rename_state = cx.new(|cx| InputState::new(window, cx));
         let join_state = cx.new(|cx| InputState::new(window, cx).placeholder("sanctum://v2/…"));
+        let group_state = cx.new(|cx| InputState::new(window, cx).placeholder("Group name"));
         let _subscriptions = vec![cx.subscribe_in(&input_state, window, {
             move |this: &mut Self, _, ev: &InputEvent, window, cx| {
                 if let InputEvent::PressEnter { .. } = ev {
@@ -189,6 +196,8 @@ impl ChatApp {
             show_sidebar: true,
             show_plus_menu: false,
             show_join: false,
+            show_group: false,
+            group_size: 3,
             inviting: false,
             picker_for: None,
             chat_menu_for: None,
@@ -196,6 +205,7 @@ impl ChatApp {
             input_state,
             rename_state,
             join_state,
+            group_state,
             outbound: out_tx,
             events: ev_rx,
             _subscriptions,
@@ -313,7 +323,7 @@ impl ChatApp {
         if text.is_empty() {
             return;
         }
-        if text.starts_with("sanctum://v2/") {
+        if text.starts_with("sanctum://v2/") || text.starts_with("sanctum://g1/") {
             self.input_state.update(cx, |s, cx| s.set_value("", window, cx));
             let n = self.chats.len();
             let _ = self
@@ -464,6 +474,13 @@ impl ChatApp {
                         cx.listener(|this, _, _, cx| {
                             this.show_plus_menu = false;
                             this.new_invite(cx);
+                        }),
+                    ))
+                    .child(item("New group…", p.text, p.hover).id("pm-group").on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.show_plus_menu = false;
+                            this.show_group = true;
+                            cx.notify();
                         }),
                     ))
                     .child(item("Join with link…", p.text, p.hover).id("pm-join").on_click(
@@ -961,6 +978,84 @@ impl Render for ChatApp {
                 )
         });
 
+        let group_panel = self.show_group.then(|| {
+            h_flex()
+                .w_full()
+                .gap_2()
+                .items_center()
+                .px_3()
+                .py_3()
+                .bg(rgb(p.surface))
+                .border_b_1()
+                .border_color(rgb(p.border))
+                .child(div().text_sm().text_color(rgb(p.text)).child("Group"))
+                .child(div().flex_1().child(Input::new(&self.group_state)))
+                .child(
+                    div()
+                        .id("group-size")
+                        .cursor_pointer()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(rgb(p.border))
+                        .text_sm()
+                        .text_color(rgb(p.text))
+                        .hover(|d| d.bg(rgb(p.hover)))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.group_size =
+                                if this.group_size >= 6 { 2 } else { this.group_size + 1 };
+                            cx.notify();
+                        }))
+                        .child(format!("{} members", self.group_size)),
+                )
+                .child(
+                    div()
+                        .id("group-go")
+                        .cursor_pointer()
+                        .px_3()
+                        .py_1()
+                        .rounded_md()
+                        .bg(rgb(accent))
+                        .text_sm()
+                        .text_color(rgb(0xFFFFFF))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if this.inviting {
+                                return;
+                            }
+                            let name =
+                                this.group_state.read(cx).value().trim().to_string();
+                            let name =
+                                if name.is_empty() { "Group".to_string() } else { name };
+                            this.inviting = true;
+                            let _ = this
+                                .outbound
+                                .send(Cmd::NewGroup { name, size: this.group_size });
+                            this.group_state.update(cx, |s, cx| s.set_value("", window, cx));
+                            window.blur(cx);
+                            this.show_group = false;
+                            cx.notify();
+                        }))
+                        .child("Create"),
+                )
+                .child(
+                    div()
+                        .id("group-cancel")
+                        .cursor_pointer()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .text_sm()
+                        .text_color(rgb(p.sub))
+                        .hover(|d| d.bg(rgb(p.hover)))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.show_group = false;
+                            cx.notify();
+                        }))
+                        .child("Cancel"),
+                )
+        });
+
         let join_panel = self.show_join.then(|| {
             h_flex()
                 .w_full()
@@ -985,7 +1080,7 @@ impl Render for ChatApp {
                         .text_color(rgb(0xFFFFFF))
                         .on_click(cx.listener(|this, _, window, cx| {
                             let link = this.join_state.read(cx).value().trim().to_string();
-                            if link.starts_with("sanctum://v2/") {
+                            if link.starts_with("sanctum://v2/") || link.starts_with("sanctum://g1/") {
                                 let n = this.chats.len();
                                 let _ = this.outbound.send(Cmd::AcceptInvite {
                                     link,
@@ -1017,86 +1112,97 @@ impl Render for ChatApp {
                 )
         });
 
-        let banner = self
+        let banner_link = self
             .chats
             .get(self.selected)
             .filter(|c| c.waiting && !c.invite_link.is_empty())
-            .map(|c| {
-                let link = c.invite_link.clone();
-                v_flex()
-                    .w_full()
-                    .gap_2()
-                    .px_3()
-                    .py_3()
-                    .bg(rgb(p.surface))
-                    .border_b_1()
-                    .border_color(rgb(p.border))
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_semibold()
-                            .text_color(rgb(p.text))
-                            .child("Invitation pending"),
-                    )
-                    .child(div().text_xs().text_color(rgb(p.sub)).child(
-                        "Share this link. It carries everything they need — no account, no signup.",
-                    ))
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .gap_2()
-                            .items_center()
-                            .child(
+            .map(|c| c.invite_link.clone());
+        let copied = self.copied_at.is_some();
+        let banner = banner_link.map(|link| {
+            let links: Vec<String> = link.split('\n').map(str::to_string).collect();
+            let many = links.len() > 1;
+            let mut card = v_flex()
+                .w_full()
+                .gap_2()
+                .px_3()
+                .py_3()
+                .bg(rgb(p.surface))
+                .border_b_1()
+                .border_color(rgb(p.border))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_semibold()
+                        .text_color(rgb(p.text))
+                        .child("Invitation pending"),
+                )
+                .child(div().text_xs().text_color(rgb(p.sub)).child(if many {
+                    "One link per member — each seat is single-use. No accounts needed."
+                } else {
+                    "Share this link. It carries everything they need — no account, no signup."
+                }));
+            for (n, one) in links.into_iter().enumerate() {
+                let short = format!("{}…", &one[..one.len().min(40)]);
+                card = card.child(
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .items_center()
+                        .when(many, |d| {
+                            d.child(
                                 div()
-                                    .flex_1()
-                                    .px_2()
-                                    .py_1()
-                                    .rounded_md()
-                                    .bg(rgb(p.well))
                                     .text_xs()
                                     .text_color(rgb(p.sub))
-                                    .overflow_hidden()
-                                    .child(format!("{}…", &link[..link.len().min(44)])),
+                                    .child(format!("Member {}", n + 2)),
                             )
-                            .child({
-                                let copied = self.copied_at.is_some();
-                                let btn = div()
-                                    .id("copy-invite")
-                                    .cursor_pointer()
-                                    .px_3()
-                                    .py_1()
-                                    .rounded_md()
-                                    .text_sm()
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(
-                                            link.clone(),
-                                        ));
-                                        this.copied_at = Some(std::time::Instant::now());
-                                        cx.notify();
-                                    }));
-                                if copied {
-                                    btn.border_1()
-                                        .border_color(rgb(accent))
-                                        .text_color(rgb(accent))
-                                        .child("Copied")
-                                        .with_animation(
-                                            "copied-pop",
-                                            Animation::new(Duration::from_millis(220)),
-                                            |d, delta| d.opacity(0.4 + 0.6 * delta),
-                                        )
-                                        .into_any_element()
-                                } else {
-                                    btn.bg(rgb(p.bg))
-                                        .border_1()
-                                        .border_color(rgb(p.border))
-                                        .hover(|d| d.bg(rgb(p.hover)))
-                                        .text_color(rgb(p.text))
-                                        .child("Copy")
-                                        .into_any_element()
-                                }
-                            }),
-                    )
-            });
+                        })
+                        .child(
+                            div()
+                                .flex_1()
+                                .px_2()
+                                .py_1()
+                                .rounded_md()
+                                .bg(rgb(p.well))
+                                .text_xs()
+                                .text_color(rgb(p.sub))
+                                .overflow_hidden()
+                                .child(short),
+                        )
+                        .child({
+                            let btn = div()
+                                .id(("copy-invite", n))
+                                .cursor_pointer()
+                                .px_3()
+                                .py_1()
+                                .rounded_md()
+                                .text_sm()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        one.clone(),
+                                    ));
+                                    this.copied_at = Some(std::time::Instant::now());
+                                    cx.notify();
+                                }));
+                            if copied {
+                                btn.border_1()
+                                    .border_color(rgb(accent))
+                                    .text_color(rgb(accent))
+                                    .child("Copied")
+                                    .into_any_element()
+                            } else {
+                                btn.bg(rgb(p.bg))
+                                    .border_1()
+                                    .border_color(rgb(p.border))
+                                    .hover(|d| d.bg(rgb(p.hover)))
+                                    .text_color(rgb(p.text))
+                                    .child("Copy")
+                                    .into_any_element()
+                            }
+                        }),
+                );
+            }
+            card
+        });
 
         let mut rows: Vec<AnyElement> = Vec::new();
         if let Some(chat) = self.chats.get(self.selected) {
@@ -1142,7 +1248,7 @@ impl Render for ChatApp {
                 if show_time {
                     caption.push(m.time.to_string());
                 }
-                let unsendable = m.mine && !m.delivered;
+                let unsendable = m.mine && !m.delivered && chat.id >= 0;
                 if Some(i) == last_delivered {
                     caption.push("Delivered".into());
                 } else if unsendable {
@@ -1222,10 +1328,20 @@ impl Render for ChatApp {
                         .child(div().when_some(m.reaction.clone(), |d, r| d.child(r)).text_sm())
                 };
 
+                let sender_label = (!m.mine)
+                    .then(|| m.sender_seat)
+                    .flatten()
+                    .map(|seat| {
+                        div()
+                            .text_xs()
+                            .text_color(rgb(p.sub))
+                            .child(format!("Member {}", seat + 1))
+                    });
                 let mut col = v_flex()
                     .w_full()
                     .when(m.mine, |d| d.items_end())
                     .when(!m.mine, |d| d.items_start())
+                    .children(sender_label)
                     .children(picker)
                     .child(row);
                 if !caption.is_empty() {
@@ -1292,6 +1408,7 @@ impl Render for ChatApp {
             .child(header)
             .children(settings_panel)
             .children(chat_info_panel)
+            .children(group_panel)
             .children(join_panel)
             .children(banner)
             .child(messages)

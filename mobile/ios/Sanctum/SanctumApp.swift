@@ -31,6 +31,7 @@ struct MsgVM: Identifiable {
     var reaction: String?
     let text: String
     let filePath: String?
+    let senderSeat: Int64?
     let ts: Date
 }
 
@@ -42,6 +43,7 @@ func toVM(_ m: FfiMsg) -> MsgVM {
         reaction: m.reaction,
         text: m.text,
         filePath: m.filePath,
+        senderSeat: m.senderSeat,
         ts: Date(timeIntervalSince1970: Double(m.tsMs) / 1000.0)
     )
 }
@@ -53,11 +55,14 @@ final class AppModel: ObservableObject {
     @Published var status = "connecting…"
     @Published var inviting = false
     @Published var hasToken = false
+    @Published var settings: FfiSettings
 
     private let client = Client()
     private var timer: Timer?
 
     init() {
+        let c = Client()
+        settings = c.getSettings()
         hasToken = client.hasApiToken()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
@@ -125,7 +130,7 @@ final class AppModel: ObservableObject {
         let wireId = client.send(contactId: sel, text: trimmed)
         chats[i].msgs.append(MsgVM(
             id: wireId, mine: true, delivered: false, reaction: nil,
-            text: trimmed, filePath: nil, ts: Date()
+            text: trimmed, filePath: nil, senderSeat: nil, ts: Date()
         ))
     }
 
@@ -144,7 +149,7 @@ final class AppModel: ObservableObject {
         let wireId = client.sendFile(contactId: sel, path: url.path)
         chats[i].msgs.append(MsgVM(
             id: wireId, mine: true, delivered: false, reaction: nil,
-            text: name, filePath: url.path, ts: Date()
+            text: name, filePath: url.path, senderSeat: nil, ts: Date()
         ))
     }
 
@@ -159,6 +164,24 @@ final class AppModel: ObservableObject {
         guard !inviting else { return }
         inviting = true
         client.newInvite(name: "Contact \(chats.count + 1)")
+    }
+
+    func saveSettings() {
+        client.saveSettings(new: settings)
+    }
+
+    func setDisappear(_ secs: UInt64) {
+        settings.disappearSecs = secs
+        saveSettings()
+        if let sel = selected {
+            client.setTimer(contactId: sel, secs: secs)
+        }
+    }
+
+    func newGroup(name: String, size: Int64) {
+        guard !inviting else { return }
+        inviting = true
+        client.newGroup(name: name.isEmpty ? "Group" : name, size: size)
     }
 
     func saveToken(_ token: String) {

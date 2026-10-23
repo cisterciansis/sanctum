@@ -505,7 +505,15 @@ public protocol ClientProtocol: AnyObject, Sendable {
     
     func deleteContact(contactId: Int64) 
     
+    func getSettings()  -> FfiSettings
+    
     func hasApiToken()  -> Bool
+    
+    /**
+     * Mint a group (2-6 members): one invite link per other seat arrives in
+     * the ContactAdded event's invite_link, newline-separated.
+     */
+    func newGroup(name: String, size: Int64) 
     
     func newInvite(name: String) 
     
@@ -517,6 +525,8 @@ public protocol ClientProtocol: AnyObject, Sendable {
     func react(contactId: Int64, refId: String, emoji: String) 
     
     func rename(contactId: Int64, name: String) 
+    
+    func saveSettings(new: FfiSettings) 
     
     func send(contactId: Int64, text: String)  -> String
     
@@ -622,11 +632,30 @@ open func deleteContact(contactId: Int64)  {try! rustCall() {
 }
 }
     
+open func getSettings() -> FfiSettings  {
+    return try!  FfiConverterTypeFfiSettings_lift(try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_get_settings(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
 open func hasApiToken() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
     uniffi_sanctum_core_fn_method_client_has_api_token(self.uniffiClonePointer(),$0
     )
 })
+}
+    
+    /**
+     * Mint a group (2-6 members): one invite link per other seat arrives in
+     * the ContactAdded event's invite_link, newline-separated.
+     */
+open func newGroup(name: String, size: Int64)  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_new_group(self.uniffiClonePointer(),
+        FfiConverterString.lower(name),
+        FfiConverterInt64.lower(size),$0
+    )
+}
 }
     
 open func newInvite(name: String)  {try! rustCall() {
@@ -659,6 +688,13 @@ open func rename(contactId: Int64, name: String)  {try! rustCall() {
     uniffi_sanctum_core_fn_method_client_rename(self.uniffiClonePointer(),
         FfiConverterInt64.lower(contactId),
         FfiConverterString.lower(name),$0
+    )
+}
+}
+    
+open func saveSettings(new: FfiSettings)  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_save_settings(self.uniffiClonePointer(),
+        FfiConverterTypeFfiSettings_lower(new),$0
     )
 }
 }
@@ -871,10 +907,17 @@ public struct FfiMsg {
     public var text: String
     public var filePath: String?
     public var tsMs: Int64
+    /**
+     * Group messages: sender's seat number (None in direct chats).
+     */
+    public var senderSeat: Int64?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(wireId: String, mine: Bool, delivered: Bool, reaction: String?, text: String, filePath: String?, tsMs: Int64) {
+    public init(wireId: String, mine: Bool, delivered: Bool, reaction: String?, text: String, filePath: String?, tsMs: Int64, 
+        /**
+         * Group messages: sender's seat number (None in direct chats).
+         */senderSeat: Int64?) {
         self.wireId = wireId
         self.mine = mine
         self.delivered = delivered
@@ -882,6 +925,7 @@ public struct FfiMsg {
         self.text = text
         self.filePath = filePath
         self.tsMs = tsMs
+        self.senderSeat = senderSeat
     }
 }
 
@@ -913,6 +957,9 @@ extension FfiMsg: Equatable, Hashable {
         if lhs.tsMs != rhs.tsMs {
             return false
         }
+        if lhs.senderSeat != rhs.senderSeat {
+            return false
+        }
         return true
     }
 
@@ -924,6 +971,7 @@ extension FfiMsg: Equatable, Hashable {
         hasher.combine(text)
         hasher.combine(filePath)
         hasher.combine(tsMs)
+        hasher.combine(senderSeat)
     }
 }
 
@@ -942,7 +990,8 @@ public struct FfiConverterTypeFfiMsg: FfiConverterRustBuffer {
                 reaction: FfiConverterOptionString.read(from: &buf), 
                 text: FfiConverterString.read(from: &buf), 
                 filePath: FfiConverterOptionString.read(from: &buf), 
-                tsMs: FfiConverterInt64.read(from: &buf)
+                tsMs: FfiConverterInt64.read(from: &buf), 
+                senderSeat: FfiConverterOptionInt64.read(from: &buf)
         )
     }
 
@@ -954,6 +1003,7 @@ public struct FfiConverterTypeFfiMsg: FfiConverterRustBuffer {
         FfiConverterString.write(value.text, into: &buf)
         FfiConverterOptionString.write(value.filePath, into: &buf)
         FfiConverterInt64.write(value.tsMs, into: &buf)
+        FfiConverterOptionInt64.write(value.senderSeat, into: &buf)
     }
 }
 
@@ -970,6 +1020,100 @@ public func FfiConverterTypeFfiMsg_lift(_ buf: RustBuffer) throws -> FfiMsg {
 #endif
 public func FfiConverterTypeFfiMsg_lower(_ value: FfiMsg) -> RustBuffer {
     return FfiConverterTypeFfiMsg.lower(value)
+}
+
+
+public struct FfiSettings {
+    public var theme: String
+    public var timestamps: Bool
+    public var proxyEnabled: Bool
+    public var proxyUrl: String
+    public var disappearSecs: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(theme: String, timestamps: Bool, proxyEnabled: Bool, proxyUrl: String, disappearSecs: UInt64) {
+        self.theme = theme
+        self.timestamps = timestamps
+        self.proxyEnabled = proxyEnabled
+        self.proxyUrl = proxyUrl
+        self.disappearSecs = disappearSecs
+    }
+}
+
+#if compiler(>=6)
+extension FfiSettings: Sendable {}
+#endif
+
+
+extension FfiSettings: Equatable, Hashable {
+    public static func ==(lhs: FfiSettings, rhs: FfiSettings) -> Bool {
+        if lhs.theme != rhs.theme {
+            return false
+        }
+        if lhs.timestamps != rhs.timestamps {
+            return false
+        }
+        if lhs.proxyEnabled != rhs.proxyEnabled {
+            return false
+        }
+        if lhs.proxyUrl != rhs.proxyUrl {
+            return false
+        }
+        if lhs.disappearSecs != rhs.disappearSecs {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(theme)
+        hasher.combine(timestamps)
+        hasher.combine(proxyEnabled)
+        hasher.combine(proxyUrl)
+        hasher.combine(disappearSecs)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiSettings: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiSettings {
+        return
+            try FfiSettings(
+                theme: FfiConverterString.read(from: &buf), 
+                timestamps: FfiConverterBool.read(from: &buf), 
+                proxyEnabled: FfiConverterBool.read(from: &buf), 
+                proxyUrl: FfiConverterString.read(from: &buf), 
+                disappearSecs: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiSettings, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.theme, into: &buf)
+        FfiConverterBool.write(value.timestamps, into: &buf)
+        FfiConverterBool.write(value.proxyEnabled, into: &buf)
+        FfiConverterString.write(value.proxyUrl, into: &buf)
+        FfiConverterUInt64.write(value.disappearSecs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSettings_lift(_ buf: RustBuffer) throws -> FfiSettings {
+    return try FfiConverterTypeFfiSettings.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSettings_lower(_ value: FfiSettings) -> RustBuffer {
+    return FfiConverterTypeFfiSettings.lower(value)
 }
 
 // Note that we don't yet support `indirect` for enums.
@@ -1150,6 +1294,30 @@ fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionInt64: FfiConverterRustBuffer {
+    typealias SwiftType = Int64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
     typealias SwiftType = String?
 
@@ -1270,7 +1438,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sanctum_core_checksum_method_client_delete_contact() != 55898) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sanctum_core_checksum_method_client_get_settings() != 39664) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sanctum_core_checksum_method_client_has_api_token() != 59461) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_new_group() != 58032) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_method_client_new_invite() != 55799) {
@@ -1283,6 +1457,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_method_client_rename() != 63413) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_save_settings() != 65329) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_method_client_send() != 42123) {

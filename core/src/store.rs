@@ -73,6 +73,8 @@ pub struct StoredMsg {
     pub ts_ms: i64,
     pub delivered: bool,
     pub reaction: Option<String>,
+    /// Group messages: which seat sent it (None for direct chats / own).
+    pub sender_seat: Option<i64>,
 }
 
 pub struct Store {
@@ -118,9 +120,28 @@ impl Store {
                 reaction TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_messages_contact ON messages(contact_id, ts_ms);
-            CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);",
+            CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS groups (
+                id INTEGER PRIMARY KEY,
+                gid TEXT NOT NULL,
+                name TEXT NOT NULL,
+                my_seat INTEGER NOT NULL,
+                size INTEGER NOT NULL,
+                access_key TEXT NOT NULL,
+                secret TEXT NOT NULL,
+                endpoint TEXT NOT NULL,
+                invite_links TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS group_members (
+                group_id INTEGER NOT NULL,
+                seat INTEGER NOT NULL,
+                pk TEXT NOT NULL,
+                PRIMARY KEY (group_id, seat)
+            );",
         )
         .map_err(|e| Error::Crypto(e.to_string()))?;
+        // Additive migration for pre-group databases; harmless when present.
+        let _ = conn.execute("ALTER TABLE messages ADD COLUMN sender_seat INTEGER", []);
         Ok(Self { conn })
     }
 
@@ -212,9 +233,9 @@ impl Store {
     pub fn add_msg(&self, contact_id: i64, m: &StoredMsg) -> Result<(), Error> {
         self.conn
             .execute(
-                "INSERT INTO messages (contact_id, wire_id, mine, text, file_path, ts_ms, delivered, reaction)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                rusqlite::params![contact_id, m.wire_id, m.mine, m.text, m.file_path, m.ts_ms, m.delivered, m.reaction],
+                "INSERT INTO messages (contact_id, wire_id, mine, text, file_path, ts_ms, delivered, reaction, sender_seat)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![contact_id, m.wire_id, m.mine, m.text, m.file_path, m.ts_ms, m.delivered, m.reaction, m.sender_seat],
             )
             .map_err(|e| Error::Crypto(e.to_string()))?;
         Ok(())
@@ -280,7 +301,7 @@ impl Store {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT wire_id, mine, text, file_path, ts_ms, delivered, reaction
+                "SELECT wire_id, mine, text, file_path, ts_ms, delivered, reaction, sender_seat
                  FROM messages WHERE contact_id = ?1 ORDER BY ts_ms, id",
             )
             .map_err(|e| Error::Crypto(e.to_string()))?;
@@ -294,10 +315,107 @@ impl Store {
                     ts_ms: r.get(4)?,
                     delivered: r.get(5)?,
                     reaction: r.get(6)?,
+                    sender_seat: r.get(7)?,
                 })
             })
             .map_err(|e| Error::Crypto(e.to_string()))?;
         rows.collect::<Result<_, _>>().map_err(|e| Error::Crypto(e.to_string()))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Group {
+    pub id: i64,
+    pub gid: String,
+    pub name: String,
+    pub my_seat: i64,
+    pub size: i64,
+    pub access_key: String,
+    pub secret: String,
+    pub endpoint: String,
+    /// Creator keeps the un-shared seat links (newline-joined) until peers join.
+    pub invite_links: String,
+    /// seat -> pk (b64), for seats whose hello has landed.
+    pub members: Vec<(i64, String)>,
+}
+
+impl Store {
+    pub fn add_group(&self, g: &Group) -> Result<i64, Error> {
+        self.conn
+            .execute(
+                "INSERT INTO groups (gid, name, my_seat, size, access_key, secret, endpoint, invite_links)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                rusqlite::params![g.gid, g.name, g.my_seat, g.size, g.access_key, g.secret, g.endpoint, g.invite_links],
+            )
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn groups(&self) -> Result<Vec<Group>, Error> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, gid, name, my_seat, size, access_key, secret, endpoint, invite_links FROM groups ORDER BY id")
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(Group {
+                    id: r.get(0)?,
+                    gid: r.get(1)?,
+                    name: r.get(2)?,
+                    my_seat: r.get(3)?,
+                    size: r.get(4)?,
+                    access_key: r.get(5)?,
+                    secret: r.get(6)?,
+                    endpoint: r.get(7)?,
+                    invite_links: r.get(8)?,
+                    members: Vec::new(),
+                })
+            })
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+        let mut groups: Vec<Group> =
+            rows.collect::<Result<_, _>>().map_err(|e| Error::Crypto(e.to_string()))?;
+        for g in &mut groups {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT seat, pk FROM group_members WHERE group_id = ?1")
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+            g.members = stmt
+                .query_map([g.id], |r| Ok((r.get(0)?, r.get(1)?)))
+                .map_err(|e| Error::Crypto(e.to_string()))?
+                .collect::<Result<_, _>>()
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+        }
+        Ok(groups)
+    }
+
+    pub fn set_group_member(&self, group_id: i64, seat: i64, pk: &str) -> Result<(), Error> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO group_members (group_id, seat, pk) VALUES (?1, ?2, ?3)",
+                rusqlite::params![group_id, seat, pk],
+            )
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn rename_group(&self, group_id: i64, name: &str) -> Result<(), Error> {
+        self.conn
+            .execute("UPDATE groups SET name = ?1 WHERE id = ?2", rusqlite::params![name, group_id])
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn delete_group(&self, group_id: i64) -> Result<(), Error> {
+        self.conn
+            .execute("DELETE FROM messages WHERE contact_id = ?1", rusqlite::params![-group_id])
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+        self.conn
+            .execute("DELETE FROM group_members WHERE group_id = ?1", rusqlite::params![group_id])
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+        self.conn
+            .execute("DELETE FROM groups WHERE id = ?1", rusqlite::params![group_id])
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+        Ok(())
     }
 }
 

@@ -262,6 +262,8 @@ impl ContactSession {
 
 pub enum Cmd {
     NewInvite { name: String },
+    /// Mint a group: full pairwise mesh, one invite link per other seat.
+    NewGroup { name: String, size: i64 },
     AcceptInvite { link: String, name: String },
     Rename { contact_id: i64, name: String },
     Send { contact_id: i64, wire_id: String, text: String },
@@ -322,6 +324,7 @@ pub fn spawn_worker(
         };
 
         let mut live: Vec<Live> = Vec::new();
+        let mut groups: Vec<GroupLive> = Vec::new();
         let mut snapshot = Vec::new();
         for c in store.contacts().unwrap_or_default() {
             let msgs = store.messages(c.id).unwrap_or_default();
@@ -330,11 +333,18 @@ pub fn spawn_worker(
                 live.push(Live { contact: c, session, pending: Vec::new() });
             }
         }
+        for g in store.groups().unwrap_or_default() {
+            let msgs = store.messages(-g.id).unwrap_or_default();
+            snapshot.push((group_as_contact(&g), msgs));
+            if let Ok(gl) = GroupLive::new(&g, &me) {
+                groups.push(gl);
+            }
+        }
         let _ = events.send(Event::Snapshot(snapshot));
 
         loop {
             while let Ok(cmd) = outbound.try_recv() {
-                handle_cmd(cmd, &store, &me, &mut live, &events);
+                handle_cmd(cmd, &store, &me, &mut live, &mut groups, &events);
             }
 
             for l in &mut live {
@@ -357,6 +367,43 @@ pub fn spawn_worker(
                 });
             }
 
+            for gl in &mut groups {
+                let gid = -gl.group.id;
+                let items = gl.poll();
+                for item in items {
+                    match item {
+                        GroupItem::NewPeer { seat, pk } => {
+                            if gl.register_peer(seat, &pk) {
+                                let _ = store.set_group_member(gl.group.id, seat, &pk);
+                                gl.group.members.push((seat, pk));
+                                // Mutual discovery: tell the newcomer who we are.
+                                gl.announce_to(&[seat]);
+                                let _ = events.send(Event::PeerJoined { contact_id: gid });
+                            }
+                        }
+                        GroupItem::Message { seat, id, text } => {
+                            let msg = StoredMsg {
+                                wire_id: id,
+                                mine: false,
+                                text,
+                                file_path: None,
+                                ts_ms: crate::store::chrono_now_ms(),
+                                delivered: false,
+                                reaction: None,
+                                sender_seat: Some(seat),
+                            };
+                            let _ = store.add_msg(gid, &msg);
+                            let _ = events.send(Event::Received { contact_id: gid, msg });
+                        }
+                        GroupItem::Reaction { ref_id, emoji } => {
+                            let _ = store.set_reaction(gid, &ref_id, &emoji);
+                            let _ = events
+                                .send(Event::Reaction { contact_id: gid, ref_id, emoji });
+                        }
+                    }
+                }
+            }
+
             let settings = crate::demo::Settings::load();
             if settings.disappear_secs > 0 {
                 let _ = store.purge_older_than(settings.disappear_secs);
@@ -366,13 +413,33 @@ pub fn spawn_worker(
     });
 }
 
+fn group_as_contact(g: &crate::store::Group) -> Contact {
+    Contact {
+        id: -g.id,
+        name: g.name.clone(),
+        bucket_in: String::new(),
+        bucket_out: String::new(),
+        access_key: String::new(),
+        secret: String::new(),
+        // "waiting" in the UI means no peer has joined yet.
+        peer_pk: if g.members.len() > 1 { "joined".into() } else { String::new() },
+        endpoint: g.endpoint.clone(),
+        invite_link: g.invite_links.clone(),
+    }
+}
+
 fn handle_cmd(
     cmd: Cmd,
     store: &Store,
     me: &Identity,
     live: &mut Vec<Live>,
+    groups: &mut Vec<GroupLive>,
     events: &std::sync::mpsc::Sender<Event>,
 ) {
+    // Negative ids are groups.
+    if let Some(gid) = cmd_group_id(&cmd) {
+        return handle_group_cmd(cmd, gid, store, groups, events);
+    }
     let send_err = |e: String| {
         let _ = events.send(Event::Error(e));
     };
@@ -391,6 +458,53 @@ fn handle_cmd(
                             live.push(Live { contact: contact.clone(), session, pending: Vec::new() });
                         }
                         let _ = events.send(Event::ContactAdded(contact));
+                    }
+                    Err(e) => send_err(e.to_string()),
+                },
+                Err(e) => send_err(e),
+            }
+        }
+        Cmd::NewGroup { name, size } => {
+            let Some(p) = Provisioner::from_settings() else {
+                return send_err(
+                    "creating a group needs a hippius_api_token in settings".into(),
+                );
+            };
+            match create_group(&p, me, &name, size) {
+                Ok((mut group, _links)) => match store.add_group(&group) {
+                    Ok(id) => {
+                        group.id = id;
+                        let _ = store.set_group_member(id, group.my_seat, {
+                            &B64.encode(me.public().as_bytes())
+                        });
+                        if let Ok(gl) = GroupLive::new(&group, me) {
+                            groups.push(gl);
+                        }
+                        let _ = events.send(Event::ContactAdded(group_as_contact(&group)));
+                    }
+                    Err(e) => send_err(e.to_string()),
+                },
+                Err(e) => send_err(e),
+            }
+        }
+        Cmd::AcceptInvite { link, name } if link.trim().starts_with(SCHEME_G1) => {
+            match accept_group(&link, me) {
+                Ok(mut group) => match store.add_group(&group) {
+                    Ok(id) => {
+                        group.id = id;
+                        let _ = store.set_group_member(id, 0, &group.members[0].1.clone());
+                        let _ = store.set_group_member(id, group.my_seat, {
+                            &B64.encode(me.public().as_bytes())
+                        });
+                        match GroupLive::new(&group, me) {
+                            Ok(gl) => {
+                                gl.announce_all();
+                                groups.push(gl);
+                                let _ =
+                                    events.send(Event::ContactAdded(group_as_contact(&group)));
+                            }
+                            Err(e) => send_err(e),
+                        }
                     }
                     Err(e) => send_err(e.to_string()),
                 },
@@ -427,6 +541,7 @@ fn handle_cmd(
                             ts_ms: crate::store::chrono_now_ms(),
                             delivered: false,
                             reaction: None,
+                            sender_seat: None,
                         },
                     );
                     l.pending.push((wire_id, key, false));
@@ -448,6 +563,7 @@ fn handle_cmd(
                             ts_ms: crate::store::chrono_now_ms(),
                             delivered: false,
                             reaction: None,
+                            sender_seat: None,
                         },
                     );
                     l.pending.push((wire_id, key, false));
@@ -506,6 +622,102 @@ fn handle_cmd(
     }
 }
 
+fn cmd_group_id(cmd: &Cmd) -> Option<i64> {
+    let id = match cmd {
+        Cmd::Rename { contact_id, .. }
+        | Cmd::Send { contact_id, .. }
+        | Cmd::SendFile { contact_id, .. }
+        | Cmd::React { contact_id, .. }
+        | Cmd::SetTimer { contact_id, .. }
+        | Cmd::Unsend { contact_id, .. }
+        | Cmd::DeleteContact { contact_id }
+        | Cmd::ClearHistory { contact_id, .. } => *contact_id,
+        _ => return None,
+    };
+    (id < 0).then_some(-id)
+}
+
+fn handle_group_cmd(
+    cmd: Cmd,
+    group_id: i64,
+    store: &Store,
+    groups: &mut Vec<GroupLive>,
+    events: &std::sync::mpsc::Sender<Event>,
+) {
+    let send_err = |e: String| {
+        let _ = events.send(Event::Error(e));
+    };
+    let cid = -group_id;
+    match cmd {
+        Cmd::Rename { name, .. } => {
+            let _ = store.rename_group(group_id, &name);
+        }
+        Cmd::Send { wire_id, text, .. } => {
+            let Some(gl) = groups.iter().find(|g| g.group.id == group_id) else { return };
+            match gl.send(&wire_id, &text) {
+                Ok(()) => {
+                    let _ = store.add_msg(
+                        cid,
+                        &StoredMsg {
+                            wire_id,
+                            mine: true,
+                            text,
+                            file_path: None,
+                            ts_ms: crate::store::chrono_now_ms(),
+                            delivered: false,
+                            reaction: None,
+                            sender_seat: None,
+                        },
+                    );
+                }
+                Err(e) => send_err(e),
+            }
+        }
+        Cmd::React { ref_id, emoji, .. } => {
+            let Some(gl) = groups.iter().find(|g| g.group.id == group_id) else { return };
+            match gl.react(&ref_id, &emoji) {
+                Ok(()) => {
+                    let _ = store.set_reaction(cid, &ref_id, &emoji);
+                }
+                Err(e) => send_err(e),
+            }
+        }
+        Cmd::ClearHistory { older_than_secs, .. } => {
+            let before =
+                older_than_secs.map(|s| crate::store::chrono_now_ms() - (s as i64) * 1000);
+            let _ = store.clear_history(cid, before);
+            let msgs = store.messages(cid).unwrap_or_default();
+            let _ = events.send(Event::History { contact_id: cid, msgs });
+        }
+        Cmd::DeleteContact { .. } => {
+            if let Some(pos) = groups.iter().position(|g| g.group.id == group_id) {
+                let gl = groups.remove(pos);
+                // Creator retires the mesh; members just leave locally.
+                if gl.group.my_seat == 0 {
+                    if let Some(p) = Provisioner::from_settings() {
+                        for i in 0..gl.group.size {
+                            for j in 0..gl.group.size {
+                                if i != j {
+                                    let _ = p.delete_bucket(&format!(
+                                        "g-{}-{}-{}",
+                                        gl.group.gid, i, j
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            let _ = store.delete_group(group_id);
+            let _ = events.send(Event::ContactRemoved { contact_id: cid });
+        }
+        Cmd::SendFile { .. } => send_err("files in groups are coming soon".into()),
+        Cmd::Unsend { .. } => send_err("unsend in groups is coming soon".into()),
+        Cmd::SetTimer { .. } => send_err("disappearing timer sync in groups is coming soon".into()),
+        _ => {}
+    }
+}
+
 fn handle_item(item: ChatItem, l: &mut Live, store: &Store, events: &std::sync::mpsc::Sender<Event>) {
     let cid = l.contact.id;
     match item {
@@ -525,6 +737,7 @@ fn handle_item(item: ChatItem, l: &mut Live, store: &Store, events: &std::sync::
                 ts_ms: crate::store::chrono_now_ms(),
                 delivered: false,
                 reaction: None,
+                sender_seat: None,
             };
             let _ = store.add_msg(cid, &msg);
             let _ = events.send(Event::Received { contact_id: cid, msg });
@@ -539,6 +752,7 @@ fn handle_item(item: ChatItem, l: &mut Live, store: &Store, events: &std::sync::
                     ts_ms: crate::store::chrono_now_ms(),
                     delivered: false,
                     reaction: None,
+                    sender_seat: None,
                 };
                 let _ = store.add_msg(cid, &msg);
                 let _ = events.send(Event::Received { contact_id: cid, msg });
@@ -557,5 +771,273 @@ fn handle_item(item: ChatItem, l: &mut Live, store: &Store, events: &std::sync::
             s.save();
             let _ = events.send(Event::TimerChanged { contact_id: cid, secs });
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Groups (v1): N members, full pairwise mesh of queue buckets minted by the
+// creator in one shot. Fan-out encryption per recipient; no group server; the
+// network never learns a group exists (buckets look like any other queues).
+// Seat discovery: joining members announce their public key as a plaintext
+// `ghello` control object (a public key is public; messages stay sealed).
+// v1 scope: text + reactions; files/receipts/unsend land later.
+// ---------------------------------------------------------------------------
+
+pub const SCHEME_G1: &str = "sanctum://g1/";
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct GroupInvite {
+    pub gid: String,
+    pub name: String,
+    pub n: i64,
+    pub seat: i64,
+    pub k: String,
+    pub s: String,
+    /// Creator's public key (seat 0), so seat 0 never needs a hello.
+    pub pk0: String,
+    pub e: String,
+}
+
+impl GroupInvite {
+    pub fn to_link(&self) -> String {
+        format!("{SCHEME_G1}{}", B64.encode(serde_json::to_vec(self).expect("serializes")))
+    }
+
+    pub fn from_link(link: &str) -> Result<Self, String> {
+        let payload = link.trim().strip_prefix(SCHEME_G1).ok_or("not a sanctum group invite")?;
+        let json = B64.decode(payload).map_err(|e| e.to_string())?;
+        serde_json::from_slice(&json).map_err(|e| e.to_string())
+    }
+}
+
+fn g_bucket(gid: &str, from: i64, to: i64) -> String {
+    format!("g-{gid}-{from}-{to}")
+}
+
+/// Creator: mint the whole mesh (N·(N-1) buckets, N seat tokens). Returns the
+/// group row (seat 0) and one invite link per other seat.
+pub fn create_group(
+    p: &Provisioner,
+    me: &Identity,
+    name: &str,
+    size: i64,
+) -> Result<(crate::store::Group, Vec<String>), String> {
+    let size = size.clamp(2, 6);
+    let gid = ulid::Ulid::new().to_string().to_lowercase();
+    for i in 0..size {
+        for j in 0..size {
+            if i != j {
+                p.create_bucket(&g_bucket(&gid, i, j)).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    let seat_buckets = |seat: i64| -> Vec<String> {
+        (0..size)
+            .filter(|&j| j != seat)
+            .flat_map(|j| [g_bucket(&gid, seat, j), g_bucket(&gid, j, seat)])
+            .collect()
+    };
+    let mut tokens = Vec::new();
+    for seat in 0..size {
+        let buckets = seat_buckets(seat);
+        let refs: Vec<&str> = buckets.iter().map(String::as_str).collect();
+        tokens.push(
+            p.create_sub_token_multi(&refs, "sanctum-group").map_err(|e| e.to_string())?,
+        );
+    }
+    let pk0 = B64.encode(me.public().as_bytes());
+    let mut links = Vec::new();
+    for seat in 1..size {
+        let (k, s) = tokens[seat as usize].clone();
+        links.push(
+            GroupInvite {
+                gid: gid.clone(),
+                name: name.into(),
+                n: size,
+                seat,
+                k,
+                s,
+                pk0: pk0.clone(),
+                e: crate::transport::DEFAULT_ENDPOINT.into(),
+            }
+            .to_link(),
+        );
+    }
+    let (k0, s0) = tokens[0].clone();
+    let group = crate::store::Group {
+        id: 0,
+        gid,
+        name: name.into(),
+        my_seat: 0,
+        size,
+        access_key: k0,
+        secret: s0,
+        endpoint: crate::transport::DEFAULT_ENDPOINT.into(),
+        invite_links: links.join("\n"),
+        members: vec![(0, pk0)],
+    };
+    Ok((group, links))
+}
+
+/// Acceptor side: adopt the seat. The worker announces our hello after the
+/// store row exists.
+pub fn accept_group(link: &str, _me: &Identity) -> Result<crate::store::Group, String> {
+    let inv = GroupInvite::from_link(link)?;
+    Ok(crate::store::Group {
+        id: 0,
+        gid: inv.gid,
+        name: inv.name,
+        my_seat: inv.seat,
+        size: inv.n,
+        access_key: inv.k,
+        secret: inv.s,
+        endpoint: inv.e,
+        invite_links: String::new(),
+        members: vec![(0, inv.pk0)],
+    })
+}
+
+pub struct GroupLive {
+    pub group: crate::store::Group,
+    me_secret: String,
+    /// seat -> peer public key.
+    peers: std::collections::HashMap<i64, PublicKey>,
+    /// (from-seat, inbox) and (to-seat, outbox) mailboxes.
+    boxes_in: Vec<(i64, Mailbox)>,
+    boxes_out: Vec<(i64, Mailbox)>,
+}
+
+pub enum GroupItem {
+    NewPeer { seat: i64, pk: String },
+    Message { seat: i64, id: String, text: String },
+    Reaction { ref_id: String, emoji: String },
+}
+
+impl GroupLive {
+    pub fn new(g: &crate::store::Group, me: &Identity) -> Result<Self, String> {
+        let mut peers = std::collections::HashMap::new();
+        for (seat, pk) in &g.members {
+            if *seat != g.my_seat {
+                let bytes: [u8; 32] = B64
+                    .decode(pk)
+                    .map_err(|e| e.to_string())?
+                    .try_into()
+                    .map_err(|_| "bad member pk")?;
+                peers.insert(*seat, PublicKey::from_bytes(bytes));
+            }
+        }
+        let mut boxes_in = Vec::new();
+        let mut boxes_out = Vec::new();
+        for j in 0..g.size {
+            if j == g.my_seat {
+                continue;
+            }
+            boxes_in.push((
+                j,
+                Mailbox::new(&g.endpoint, &g_bucket(&g.gid, j, g.my_seat), &g.access_key, &g.secret)
+                    .map_err(|e| e.to_string())?,
+            ));
+            boxes_out.push((
+                j,
+                Mailbox::new(&g.endpoint, &g_bucket(&g.gid, g.my_seat, j), &g.access_key, &g.secret)
+                    .map_err(|e| e.to_string())?,
+            ));
+        }
+        Ok(Self { group: g.clone(), me_secret: me.to_b64(), peers, boxes_in, boxes_out })
+    }
+
+    fn me(&self) -> Identity {
+        Identity::from_b64(&self.me_secret).expect("identity round-trips")
+    }
+
+    /// Announce our pk to specific seats (plaintext ghello control object).
+    pub fn announce_to(&self, seats: &[i64]) {
+        let body = serde_json::json!({
+            "t": "ghello",
+            "pk": B64.encode(self.me().public().as_bytes()),
+            "s": self.group.my_seat,
+        })
+        .to_string();
+        for (seat, out) in &self.boxes_out {
+            if seats.contains(seat) {
+                let _ = out.put(&format!("m/{}", ulid::Ulid::new()), body.as_bytes());
+            }
+        }
+    }
+
+    pub fn announce_all(&self) {
+        let all: Vec<i64> = self.boxes_out.iter().map(|(s, _)| *s).collect();
+        self.announce_to(&all);
+    }
+
+    pub fn register_peer(&mut self, seat: i64, pk_b64: &str) -> bool {
+        if self.peers.contains_key(&seat) || seat == self.group.my_seat {
+            return false;
+        }
+        let Ok(bytes) = B64.decode(pk_b64) else { return false };
+        let Ok(arr) = <[u8; 32]>::try_from(bytes.as_slice()) else { return false };
+        self.peers.insert(seat, PublicKey::from_bytes(arr));
+        true
+    }
+
+    pub fn send(&self, wire_id: &str, text: &str) -> Result<(), String> {
+        let body =
+            serde_json::json!({ "t": "m", "id": wire_id, "x": text }).to_string();
+        self.fan_out(&body)
+    }
+
+    pub fn react(&self, ref_id: &str, emoji: &str) -> Result<(), String> {
+        let body = serde_json::json!({ "t": "r", "ref": ref_id, "e": emoji }).to_string();
+        self.fan_out(&body)
+    }
+
+    fn fan_out(&self, body: &str) -> Result<(), String> {
+        let me = self.me();
+        for (seat, out) in &self.boxes_out {
+            let Some(pk) = self.peers.get(seat) else { continue };
+            let sealed = seal(&me, pk, body.as_bytes()).map_err(|e| e.to_string())?;
+            out.put(&format!("m/{}", ulid::Ulid::new()), &sealed).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    pub fn poll(&self) -> Vec<GroupItem> {
+        let me = self.me();
+        let mut out = Vec::new();
+        for (seat, mbox) in &self.boxes_in {
+            let Ok(keys) = mbox.list("m/") else { continue };
+            for key in keys {
+                let Ok(raw) = mbox.get(&key) else { continue };
+                // Plaintext ghello first; everything else is sealed.
+                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&raw) {
+                    if v.get("t").and_then(|t| t.as_str()) == Some("ghello") {
+                        let pk = v.get("pk").and_then(|x| x.as_str()).unwrap_or_default();
+                        let s = v.get("s").and_then(|x| x.as_i64()).unwrap_or(-1);
+                        out.push(GroupItem::NewPeer { seat: s, pk: pk.into() });
+                        let _ = mbox.delete(&key);
+                        continue;
+                    }
+                }
+                let Ok((_, pt)) = open(&me, &raw) else { continue };
+                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&pt) {
+                    let s = |k: &str| {
+                        v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string()
+                    };
+                    match v.get("t").and_then(|t| t.as_str()) {
+                        Some("m") => out.push(GroupItem::Message {
+                            seat: *seat,
+                            id: s("id"),
+                            text: s("x"),
+                        }),
+                        Some("r") => {
+                            out.push(GroupItem::Reaction { ref_id: s("ref"), emoji: s("e") })
+                        }
+                        _ => {}
+                    }
+                }
+                let _ = mbox.delete(&key);
+            }
+        }
+        out
     }
 }

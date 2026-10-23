@@ -39,7 +39,17 @@ impl Msg {
             mine: m.mine,
             delivered: m.delivered,
             reaction: m.reaction,
-            text: if let Some(p) = &m.file_path { format!("[file] {} -> {p}", m.text) } else { m.text },
+            text: {
+                let base = if let Some(p) = &m.file_path {
+                    format!("[file] {} -> {p}", m.text)
+                } else {
+                    m.text
+                };
+                match m.sender_seat {
+                    Some(seat) if !m.mine => format!("[m{}] {base}", seat + 1),
+                    _ => base,
+                }
+            },
             time: ts.format("%-I:%M %p").to_string(),
             day: ts.format("%A, %b %-d").to_string(),
         }
@@ -192,7 +202,7 @@ impl App {
             return;
         }
         // Pasting an invite joins it.
-        if text.starts_with("sanctum://v2/") {
+        if text.starts_with("sanctum://v2/") || text.starts_with("sanctum://g1/") {
             let n = self.chats.len();
             let _ = self
                 .outbound
@@ -204,6 +214,17 @@ impl App {
             self.status = "no chat selected — Ctrl-N to invite someone".into();
             return;
         };
+        if let Some(rest) = text.strip_prefix("/group ") {
+            let mut it = rest.splitn(2, ' ');
+            let size: i64 = it.next().and_then(|x| x.parse().ok()).unwrap_or(3);
+            let name = it.next().unwrap_or("Group").trim().to_string();
+            if !self.inviting {
+                self.inviting = true;
+                let _ = self.outbound.send(Cmd::NewGroup { name, size });
+            }
+            self.input.clear();
+            return;
+        }
         if text == "/clear" || text == "/clearweek" {
             let older = (text == "/clearweek").then_some(7 * 86400);
             let _ = self.outbound.send(Cmd::ClearHistory { contact_id: sel, older_than_secs: older });
@@ -373,8 +394,16 @@ impl App {
                     " Waiting for them to join. Send this invite link:",
                     Style::default().fg(Color::Yellow),
                 )));
-                for chunk in c.invite_link.as_bytes().chunks(width.max(20)) {
-                    lines.push(Line::raw(String::from_utf8_lossy(chunk).into_owned()));
+                for (n, one) in c.invite_link.split('\n').enumerate() {
+                    if c.invite_link.contains('\n') {
+                        lines.push(Line::from(Span::styled(
+                            format!(" Member {}:", n + 2),
+                            Style::default().fg(Color::Yellow),
+                        )));
+                    }
+                    for chunk in one.as_bytes().chunks(width.max(20)) {
+                        lines.push(Line::raw(String::from_utf8_lossy(chunk).into_owned()));
+                    }
                 }
                 lines.push(Line::raw(""));
             }

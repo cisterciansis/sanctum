@@ -20,6 +20,8 @@ pub struct FfiMsg {
     pub text: String,
     pub file_path: Option<String>,
     pub ts_ms: i64,
+    /// Group messages: sender's seat number (None in direct chats).
+    pub sender_seat: Option<i64>,
 }
 
 impl From<StoredMsg> for FfiMsg {
@@ -32,6 +34,7 @@ impl From<StoredMsg> for FfiMsg {
             text: m.text,
             file_path: m.file_path,
             ts_ms: m.ts_ms,
+            sender_seat: m.sender_seat,
         }
     }
 }
@@ -55,6 +58,15 @@ pub enum FfiEvent {
     Reaction { contact_id: i64, ref_id: String, emoji: String },
     History { contact_id: i64, msgs: Vec<FfiMsg> },
     ErrorEvent { message: String },
+}
+
+#[derive(uniffi::Record, Clone)]
+pub struct FfiSettings {
+    pub theme: String,
+    pub timestamps: bool,
+    pub proxy_enabled: bool,
+    pub proxy_url: String,
+    pub disappear_secs: u64,
 }
 
 #[derive(uniffi::Object)]
@@ -178,6 +190,12 @@ impl Client {
         let _ = self.outbound.lock().expect("outbound lock").send(Cmd::NewInvite { name });
     }
 
+    /// Mint a group (2-6 members): one invite link per other seat arrives in
+    /// the ContactAdded event's invite_link, newline-separated.
+    pub fn new_group(&self, name: String, size: i64) {
+        let _ = self.outbound.lock().expect("outbound lock").send(Cmd::NewGroup { name, size });
+    }
+
     pub fn react(&self, contact_id: i64, ref_id: String, emoji: String) {
         let _ = self
             .outbound
@@ -196,6 +214,27 @@ impl Client {
             .lock()
             .expect("outbound lock")
             .send(Cmd::DeleteContact { contact_id });
+    }
+
+    pub fn get_settings(&self) -> FfiSettings {
+        let s = crate::demo::Settings::load();
+        FfiSettings {
+            theme: s.theme,
+            timestamps: s.timestamps,
+            proxy_enabled: s.proxy_enabled,
+            proxy_url: s.proxy_url,
+            disappear_secs: s.disappear_secs,
+        }
+    }
+
+    pub fn save_settings(&self, new: FfiSettings) {
+        let mut s = crate::demo::Settings::load();
+        s.theme = new.theme;
+        s.timestamps = new.timestamps;
+        s.proxy_enabled = new.proxy_enabled;
+        s.proxy_url = new.proxy_url;
+        s.disappear_secs = new.disappear_secs;
+        s.save();
     }
 
     /// Store the Hippius management token (enables creating invites).

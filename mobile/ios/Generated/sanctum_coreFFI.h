@@ -282,9 +282,19 @@ void uniffi_sanctum_core_fn_method_client_clear_history(void*_Nonnull ptr, int64
 void uniffi_sanctum_core_fn_method_client_delete_contact(void*_Nonnull ptr, int64_t contact_id, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_GET_SETTINGS
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_GET_SETTINGS
+RustBuffer uniffi_sanctum_core_fn_method_client_get_settings(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_HAS_API_TOKEN
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_HAS_API_TOKEN
 int8_t uniffi_sanctum_core_fn_method_client_has_api_token(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_NEW_GROUP
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_NEW_GROUP
+void uniffi_sanctum_core_fn_method_client_new_group(void*_Nonnull ptr, RustBuffer name, int64_t size, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_NEW_INVITE
@@ -305,6 +315,11 @@ void uniffi_sanctum_core_fn_method_client_react(void*_Nonnull ptr, int64_t conta
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_RENAME
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_RENAME
 void uniffi_sanctum_core_fn_method_client_rename(void*_Nonnull ptr, int64_t contact_id, RustBuffer name, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_SAVE_SETTINGS
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_SAVE_SETTINGS
+void uniffi_sanctum_core_fn_method_client_save_settings(void*_Nonnull ptr, RustBuffer new, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_SEND
@@ -635,9 +650,21 @@ uint16_t uniffi_sanctum_core_checksum_method_client_delete_contact(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_GET_SETTINGS
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_GET_SETTINGS
+uint16_t uniffi_sanctum_core_checksum_method_client_get_settings(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_HAS_API_TOKEN
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_HAS_API_TOKEN
 uint16_t uniffi_sanctum_core_checksum_method_client_has_api_token(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_NEW_GROUP
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_NEW_GROUP
+uint16_t uniffi_sanctum_core_checksum_method_client_new_group(void
     
 );
 #endif
@@ -662,6 +689,12 @@ uint16_t uniffi_sanctum_core_checksum_method_client_react(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_RENAME
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_RENAME
 uint16_t uniffi_sanctum_core_checksum_method_client_rename(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_SAVE_SETTINGS
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_SAVE_SETTINGS
+uint16_t uniffi_sanctum_core_checksum_method_client_save_settings(void
     
 );
 #endif

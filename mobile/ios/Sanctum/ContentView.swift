@@ -8,6 +8,7 @@ struct ContentView: View {
     @EnvironmentObject var model: AppModel
     @State private var showJoin = false
     @State private var showSettings = false
+    @State private var showNewGroup = false
     @State private var renaming: ChatVM?
     @State private var renameText = ""
 
@@ -84,6 +85,15 @@ struct ContentView: View {
                         } label: {
                             Label("New Invite", systemImage: "person.badge.plus")
                         }
+                        Button {
+                            if model.hasToken {
+                                showNewGroup = true
+                            } else {
+                                showSettings = true
+                            }
+                        } label: {
+                            Label("New Group", systemImage: "person.3")
+                        }
                         Button { showJoin = true } label: {
                             Label("Join with Link", systemImage: "link.badge.plus")
                         }
@@ -121,6 +131,11 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showJoin) { JoinSheet() }
         .sheet(isPresented: $showSettings) { SettingsSheet() }
+        .sheet(isPresented: $showNewGroup) { NewGroupSheet() }
+        .preferredColorScheme(
+            model.settings.theme == "dark" ? .dark
+                : model.settings.theme == "light" ? .light : nil
+        )
         .alert("Rename chat", isPresented: Binding(
             get: { renaming != nil },
             set: { if !$0 { renaming = nil } }
@@ -189,13 +204,48 @@ struct JoinSheet: View {
                         model.join(link)
                         dismiss()
                     }
-                    .disabled(!link.trimmingCharacters(in: .whitespacesAndNewlines)
-                        .hasPrefix("sanctum://v2/"))
+                    .disabled({
+                        let t = link.trimmingCharacters(in: .whitespacesAndNewlines)
+                        return !(t.hasPrefix("sanctum://v2/") || t.hasPrefix("sanctum://g1/"))
+                    }())
                 } footer: {
                     Text("An invite carries everything you need — no account, no signup.")
                 }
             }
             .navigationTitle("Join a chat")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+struct NewGroupSheet: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.dismiss) var dismiss
+    @State private var name = ""
+    @State private var size = 3
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Group name", text: $name)
+                    Stepper("Members: \(size)", value: $size, in: 2...6)
+                } footer: {
+                    Text("You get one invite link per member. Each is single-use; nobody needs an account.")
+                }
+                Section {
+                    Button("Create Group") {
+                        model.newGroup(name: name, size: Int64(size))
+                        dismiss()
+                    }
+                }
+            }
+            .navigationTitle("New Group")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -214,6 +264,31 @@ struct SettingsSheet: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("Appearance") {
+                    Picker("Theme", selection: Binding(
+                        get: { model.settings.theme },
+                        set: { model.settings.theme = $0; model.saveSettings() }
+                    )) {
+                        Text("System").tag("system")
+                        Text("Light").tag("light")
+                        Text("Dark").tag("dark")
+                    }
+                    .pickerStyle(.segmented)
+                }
+                Section {
+                    Toggle("Timestamps", isOn: Binding(
+                        get: { model.settings.timestamps },
+                        set: { model.settings.timestamps = $0; model.saveSettings() }
+                    ))
+                    Toggle("Route via tunnel (Tor / UR)", isOn: Binding(
+                        get: { model.settings.proxyEnabled },
+                        set: { model.settings.proxyEnabled = $0; model.saveSettings() }
+                    ))
+                } header: {
+                    Text("Messages & network")
+                } footer: {
+                    Text("Tunnel: \(model.settings.proxyUrl) · applies on next launch")
+                }
                 Section {
                     if model.hasToken {
                         Label("Inviting enabled", systemImage: "checkmark.seal.fill")
@@ -375,6 +450,23 @@ struct ChatView: View {
                             Label("Share Invite", systemImage: "square.and.arrow.up")
                         }
                     }
+                    if chat.id >= 0 {
+                        Menu {
+                            ForEach([(UInt64(0), "Off"), (60, "1 minute"), (3600, "1 hour"), (86400, "1 day")], id: \.0) { secs, label in
+                                Button {
+                                    model.setDisappear(secs)
+                                } label: {
+                                    if model.settings.disappearSecs == secs {
+                                        Label(label, systemImage: "checkmark")
+                                    } else {
+                                        Text(label)
+                                    }
+                                }
+                            }
+                        } label: {
+                            Label("Disappearing Messages", systemImage: "timer")
+                        }
+                    }
                     Button {
                         model.clearHistory(chat.id, olderThanSecs: nil)
                     } label: {
@@ -384,10 +476,10 @@ struct ChatView: View {
                     Button(role: .destructive) {
                         model.deleteChat(chat.id)
                     } label: {
-                        Label("Delete Chat", systemImage: "trash")
+                        Label(chat.id < 0 ? "Leave Group" : "Delete Chat", systemImage: "trash")
                     }
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    Image(systemName: "ellipsis")
                 }
             }
         }
@@ -410,39 +502,50 @@ struct PressableStyle: ButtonStyle {
 
 struct InviteBanner: View {
     let link: String
-    @State private var copied = false
+    @State private var copiedIdx: Int? = nil
 
     var body: some View {
+        let links = link.split(separator: "\n").map(String.init)
         VStack(alignment: .leading, spacing: 6) {
             Text("Invitation pending").font(.subheadline).bold()
-            Text("Share this link. It carries everything they need.")
+            Text(links.count > 1
+                ? "One link per member — each is single-use."
+                : "Share this link. It carries everything they need.")
                 .font(.caption).foregroundStyle(.secondary)
-            HStack(spacing: 8) {
-                ShareLink(item: link) {
-                    Label("Share", systemImage: "square.and.arrow.up")
-                        .font(.footnote)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                Button {
-                    UIPasteboard.general.string = link
-                    withAnimation(.easeOut(duration: 0.18)) { copied = true }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
-                        withAnimation { copied = false }
+            ForEach(Array(links.enumerated()), id: \.offset) { n, one in
+                HStack(spacing: 8) {
+                    if links.count > 1 {
+                        Text("Member \(n + 2)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 64, alignment: .leading)
                     }
-                } label: {
-                    Text(copied ? "Copied" : "Copy")
-                        .font(.footnote)
-                        .frame(maxWidth: .infinity)
+                    ShareLink(item: one) {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                            .font(.footnote)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    Button {
+                        UIPasteboard.general.string = one
+                        withAnimation(.easeOut(duration: 0.18)) { copiedIdx = n }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+                            withAnimation { copiedIdx = nil }
+                        }
+                    } label: {
+                        Text(copiedIdx == n ? "Copied" : "Copy")
+                            .font(.footnote)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(copiedIdx == n ? .green : nil)
                 }
-                .buttonStyle(.bordered)
-                .tint(copied ? .green : nil)
-                .sensoryFeedback(.success, trigger: copied) { _, new in new }
             }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemBackground))
+        .sensoryFeedback(.success, trigger: copiedIdx) { _, new in new != nil }
     }
 }
 
@@ -455,6 +558,11 @@ struct Bubble: View {
         HStack {
             if msg.mine { Spacer(minLength: 60) }
             VStack(alignment: msg.mine ? .trailing : .leading, spacing: 2) {
+                if !msg.mine, let seat = msg.senderSeat {
+                    Text("Member \(seat + 1)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
                 bubbleContent
                     .contextMenu {
                         if !msg.mine {
@@ -482,6 +590,9 @@ struct Bubble: View {
                     }
                 HStack(spacing: 4) {
                     if let r = msg.reaction { Text(r).font(.caption) }
+                    if model.settings.timestamps {
+                        Text(msg.ts, style: .time).font(.caption2).foregroundStyle(.secondary)
+                    }
                     if msg.mine && msg.delivered {
                         Text("Delivered").font(.caption2).foregroundStyle(.secondary)
                     }
