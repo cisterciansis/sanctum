@@ -856,7 +856,7 @@ impl Render for ChatApp {
                                 .hover(|d| d.bg(rgb(p.hover)))
                                 .text_sm()
                                 .text_color(rgb(p.text))
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                                .on_click(cx.listener(move |this, _, window, cx| {
                                     let name = this.rename_state.read(cx).value().trim().to_string();
                                     if !name.is_empty() {
                                         let _ = this
@@ -867,6 +867,10 @@ impl Render for ChatApp {
                                         {
                                             c.name = name.into();
                                         }
+                                        // Leave the field and close the panel —
+                                        // the renamed sidebar row is the confirmation.
+                                        window.blur(cx);
+                                        this.show_chat_info = false;
                                         cx.notify();
                                     }
                                 }))
