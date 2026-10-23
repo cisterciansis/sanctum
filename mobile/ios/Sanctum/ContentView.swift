@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UniformTypeIdentifiers
 
 let tapbacks = ["👍", "👎", "❤️", "‼️", "❓", "😂"]
 
@@ -254,6 +255,8 @@ struct ChatView: View {
     @State private var copied = false
     @State private var sendPulse = 0
     @State private var photoItem: PhotosPickerItem?
+    @State private var showPhotoPicker = false
+    @State private var showFileImporter = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -281,15 +284,26 @@ struct ChatView: View {
                 }
             }
             HStack(spacing: 8) {
-                PhotosPicker(selection: $photoItem, matching: .images) {
+                Menu {
+                    Button {
+                        showPhotoPicker = true
+                    } label: {
+                        Label("Photo Library", systemImage: "photo.on.rectangle")
+                    }
+                    Button {
+                        showFileImporter = true
+                    } label: {
+                        Label("Choose File", systemImage: "folder")
+                    }
+                } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(.secondary)
                         .frame(width: 30, height: 30)
                         .background(Circle().fill(Color(.systemGray5)))
                 }
-                .buttonStyle(PressableStyle())
                 .disabled(chat.waiting)
+                .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
                 .onChange(of: photoItem) {
                     guard let item = photoItem else { return }
                     photoItem = nil
@@ -299,6 +313,18 @@ struct ChatView: View {
                                 model.sendFile(data, suggestedName: "photo.jpg")
                             }
                         }
+                    }
+                }
+                .fileImporter(
+                    isPresented: $showFileImporter,
+                    allowedContentTypes: [.item],
+                    allowsMultipleSelection: false
+                ) { result in
+                    guard case .success(let urls) = result, let url = urls.first else { return }
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                    if let data = try? Data(contentsOf: url) {
+                        model.sendFile(data, suggestedName: url.lastPathComponent)
                     }
                 }
                 TextField("Sanctum", text: $draft, axis: .vertical)
