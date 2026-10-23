@@ -6560,6 +6560,7 @@ name = "sanctum-desktop"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "chrono",
  "gpui-kit",
  "sanctum-core",
  "ulid",
@@ -6569,6 +6570,7 @@ dependencies = [
 name = "sanctum-tui"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "crossterm",
  "ratatui",
  "sanctum-core",

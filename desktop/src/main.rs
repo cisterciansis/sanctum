@@ -4,6 +4,7 @@
 
 use std::time::Duration;
 
+use chrono::Local;
 use gpui_kit::assets::Assets;
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
@@ -11,13 +12,29 @@ use gpui_kit::component::{
     *,
 };
 use gpui_kit::{prelude::FluentBuilder as _, *};
-use sanctum_core::demo::{spawn_worker, Event};
+use sanctum_core::demo::{spawn_worker, Cmd, Event, Settings};
 
 struct Msg {
     id: u64,
     mine: bool,
     delivered: bool,
     text: SharedString,
+    time: SharedString,
+    day: String,
+}
+
+impl Msg {
+    fn now(id: u64, mine: bool, text: String) -> Self {
+        let now = Local::now();
+        Self {
+            id,
+            mine,
+            delivered: false,
+            text: text.into(),
+            time: now.format("%-I:%M %p").to_string().into(),
+            day: now.format("%A, %b %-d").to_string(),
+        }
+    }
 }
 
 struct ChatApp {
@@ -26,8 +43,9 @@ struct ChatApp {
     status: SharedString,
     msgs: Vec<Msg>,
     next_id: u64,
+    settings: Settings,
     input_state: Entity<InputState>,
-    outbound: std::sync::mpsc::Sender<(u64, String)>,
+    outbound: std::sync::mpsc::Sender<Cmd>,
     events: std::sync::mpsc::Receiver<Event>,
     _subscriptions: Vec<Subscription>,
 }
@@ -62,12 +80,12 @@ impl ChatApp {
         .detach();
 
         Self {
-
             peer,
             paired: false,
             status: "connecting to Hippius…".into(),
             msgs: Vec::new(),
             next_id: 0,
+            settings: Settings::load(),
             input_state,
             outbound: out_tx,
             events: ev_rx,
@@ -84,17 +102,13 @@ impl ChatApp {
                     self.paired = true;
                     self.status = "end-to-end encrypted · hippius".into();
                 }
-                Event::Received(text) => self.msgs.push(Msg {
-                    id: u64::MAX,
-                    mine: false,
-                    delivered: false,
-                    text: text.into(),
-                }),
+                Event::Received(text) => self.msgs.push(Msg::now(u64::MAX, false, text)),
                 Event::Delivered(id) => {
                     if let Some(m) = self.msgs.iter_mut().find(|m| m.mine && m.id == id) {
                         m.delivered = true;
                     }
                 }
+                Event::Unsent(id) => self.msgs.retain(|m| !(m.mine && m.id == id)),
                 Event::Error(e) => self.status = format!("error: {e}").into(),
             }
         }
@@ -111,53 +125,114 @@ impl ChatApp {
         self.input_state.update(cx, |s, cx| s.set_value("", window, cx));
         let id = self.next_id;
         self.next_id += 1;
-        self.msgs.push(Msg { id, mine: true, delivered: false, text: text.clone().into() });
-        let _ = self.outbound.send((id, text));
+        self.msgs.push(Msg::now(id, true, text.clone()));
+        let _ = self.outbound.send(Cmd::Send(id, text));
         cx.notify();
-    }
-
-    /// `receipt`: show the iMessage-style "Delivered" caption under this bubble.
-    fn bubble(msg: &Msg, receipt: bool) -> Div {
-        let bubble = div()
-            .max_w(relative(0.72))
-            .px_3()
-            .py_1p5()
-            .text_sm()
-            .rounded(px(18.));
-        let bubble = if msg.mine {
-            bubble.bg(rgb(0x0A84FF)).text_color(rgb(0xFFFFFF))
-        } else {
-            bubble.bg(rgb(0xE9E9EB)).text_color(rgb(0x000000))
-        };
-        let mut col = v_flex()
-            .w_full()
-            .when(msg.mine, |d| d.items_end())
-            .when(!msg.mine, |d| d.items_start())
-            .child(bubble.child(msg.text.clone()));
-        if receipt {
-            col = col.child(
-                div()
-                    .text_xs()
-                    .font_semibold()
-                    .text_color(rgb(0x8E8E93))
-                    .child("Delivered"),
-            );
-        }
-        col
     }
 }
 
 impl Render for ChatApp {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let header = v_flex()
+        let show_time = self.settings.timestamps;
+        let header = h_flex()
             .w_full()
             .items_center()
             .pt_3()
             .pb_2()
+            .px_3()
             .border_b_1()
             .border_color(rgb(0xDDDDDD))
-            .child(div().text_sm().font_semibold().child(self.peer.clone()))
-            .child(div().text_xs().text_color(rgb(0x8E8E93)).child(self.status.clone()));
+            .child(div().w_8())
+            .child(
+                v_flex()
+                    .flex_1()
+                    .items_center()
+                    .child(div().text_sm().font_semibold().child(self.peer.clone()))
+                    .child(div().text_xs().text_color(rgb(0x8E8E93)).child(self.status.clone())),
+            )
+            .child(
+                // Settings: toggle timestamps (persisted).
+                Button::new("ts-toggle")
+                    .ghost()
+                    .label("🕒")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.settings.timestamps = !this.settings.timestamps;
+                        this.settings.save();
+                        cx.notify();
+                    })),
+            );
+
+        let last_delivered = self.msgs.iter().rposition(|m| m.mine && m.delivered);
+
+        let mut rows: Vec<AnyElement> = Vec::new();
+        let mut prev_day: Option<&str> = None;
+        for (i, m) in self.msgs.iter().enumerate() {
+            if prev_day != Some(m.day.as_str()) {
+                prev_day = Some(m.day.as_str());
+                rows.push(
+                    div()
+                        .w_full()
+                        .text_center()
+                        .text_xs()
+                        .text_color(rgb(0x8E8E93))
+                        .py_1()
+                        .child(m.day.clone())
+                        .into_any_element(),
+                );
+            }
+
+            let bubble = div()
+                .max_w(relative(0.72))
+                .px_3()
+                .py_1p5()
+                .text_sm()
+                .rounded(px(18.));
+            let bubble = if m.mine {
+                bubble.bg(rgb(0x0A84FF)).text_color(rgb(0xFFFFFF))
+            } else {
+                bubble.bg(rgb(0xE9E9EB)).text_color(rgb(0x000000))
+            };
+
+            // Caption line under the bubble: time, receipt, unsend affordance.
+            let mut caption: Vec<String> = Vec::new();
+            if show_time {
+                caption.push(m.time.to_string());
+            }
+            let unsendable = m.mine && !m.delivered;
+            if Some(i) == last_delivered {
+                caption.push("Delivered".into());
+            } else if unsendable {
+                caption.push("click bubble to unsend".into());
+            }
+
+            let id = m.id;
+            let bubble: AnyElement = if unsendable {
+                bubble
+                    .id(("msg", i))
+                    .on_click(cx.listener(move |this, _, _, _| {
+                        let _ = this.outbound.send(Cmd::Unsend(id));
+                    }))
+                    .child(m.text.clone())
+                    .into_any_element()
+            } else {
+                bubble.child(m.text.clone()).into_any_element()
+            };
+
+            let mut col = v_flex()
+                .w_full()
+                .when(m.mine, |d| d.items_end())
+                .when(!m.mine, |d| d.items_start())
+                .child(bubble);
+            if !caption.is_empty() {
+                col = col.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(0x8E8E93))
+                        .child(caption.join(" · ")),
+                );
+            }
+            rows.push(col.into_any_element());
+        }
 
         let messages = v_flex()
             .id("messages")
@@ -166,17 +241,7 @@ impl Render for ChatApp {
             .gap_1()
             .p_3()
             .overflow_y_scroll()
-            .children({
-                // iMessage shows the receipt only under the newest delivered own message.
-                let last_delivered = self
-                    .msgs
-                    .iter()
-                    .rposition(|m| m.mine && m.delivered);
-                self.msgs
-                    .iter()
-                    .enumerate()
-                    .map(move |(i, m)| Self::bubble(m, Some(i) == last_delivered))
-            });
+            .children(rows);
 
         let composer = h_flex()
             .w_full()

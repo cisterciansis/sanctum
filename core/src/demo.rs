@@ -94,6 +94,12 @@ impl Session {
         Ok(!self.mbox.exists(key).map_err(|e| e.to_string())?)
     }
 
+    /// Unsend: delete our own object before pickup — the message never
+    /// reaches the peer. True deletion, not a tombstone.
+    pub fn unsend(&self, key: &str) -> Result<(), String> {
+        self.mbox.delete(key).map_err(|e| e.to_string())
+    }
+
     /// Drain this side's inbox prefix; delete after successful decrypt.
     pub fn poll(&self) -> Vec<String> {
         let mut out = Vec::new();
@@ -111,18 +117,60 @@ impl Session {
     }
 }
 
-/// Events the background worker reports to a UI. Outbound messages carry a
-/// UI-chosen id; Delivered echoes it back once the peer's device has fetched
-/// and decrypted that message (its drop object is gone).
+/// Client settings shared by GUI and TUI, persisted as JSON.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy)]
+pub struct Settings {
+    pub timestamps: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { timestamps: true }
+    }
+}
+
+impl Settings {
+    fn path() -> Option<String> {
+        std::env::var("HOME").ok().map(|h| format!("{h}/.sanctum/settings.json"))
+    }
+
+    pub fn load() -> Self {
+        Self::path()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self) {
+        if let Some(p) = Self::path() {
+            if let Some(dir) = std::path::Path::new(&p).parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::write(p, serde_json::to_string_pretty(self).unwrap_or_default());
+        }
+    }
+}
+
+/// Commands a UI sends to the worker. Ids are UI-chosen per message.
+pub enum Cmd {
+    Send(u64, String),
+    /// Delete the message from the drop if the peer hasn't fetched it yet.
+    Unsend(u64),
+}
+
+/// Events the background worker reports to a UI. Delivered/Unsent echo the
+/// UI's message id; Delivered fires once the peer's device has fetched and
+/// decrypted that message (its drop object is gone).
 pub enum Event {
     Paired,
     Received(String),
     Delivered(u64),
+    Unsent(u64),
     Error(String),
 }
 
 /// Worker thread: owns the blocking Session; UIs talk to it via channels.
-pub fn spawn_worker(outbound: Receiver<(u64, String)>, events: Sender<Event>) {
+pub fn spawn_worker(outbound: Receiver<Cmd>, events: Sender<Event>) {
     std::thread::spawn(move || {
         let mut session = match Session::from_env() {
             Ok(s) => s,
@@ -140,11 +188,28 @@ pub fn spawn_worker(outbound: Receiver<(u64, String)>, events: Sender<Event>) {
                 paired = true;
                 let _ = events.send(Event::Paired);
             }
-            while let Ok((id, text)) = outbound.try_recv() {
-                match session.send(&text) {
-                    Ok(key) => pending.push((id, key, false)),
-                    Err(e) => {
-                        let _ = events.send(Event::Error(e));
+            while let Ok(cmd) = outbound.try_recv() {
+                match cmd {
+                    Cmd::Send(id, text) => match session.send(&text) {
+                        Ok(key) => pending.push((id, key, false)),
+                        Err(e) => {
+                            let _ = events.send(Event::Error(e));
+                        }
+                    },
+                    Cmd::Unsend(id) => {
+                        if let Some(pos) = pending.iter().position(|(pid, ..)| *pid == id) {
+                            let (_, key, _) = pending.remove(pos);
+                            match session.unsend(&key) {
+                                Ok(()) => {
+                                    let _ = events.send(Event::Unsent(id));
+                                }
+                                // Peer's poll may have deleted it first: delivered wins.
+                                Err(_) => {
+                                    let _ = events.send(Event::Delivered(id));
+                                }
+                            }
+                        }
+                        // Not pending = already delivered; the UI already knows.
                     }
                 }
             }
