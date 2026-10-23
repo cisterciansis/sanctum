@@ -1,0 +1,28 @@
+name: Sanctum
+options:
+  bundleIdPrefix: chat.sanctum
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  Sanctum:
+    type: application
+    platform: iOS
+    sources:
+      - Sanctum
+      - Generated
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: chat.sanctum.app
+        SWIFT_OBJC_BRIDGING_HEADER: Sanctum/Bridging.h
+        LIBRARY_SEARCH_PATHS: "$(SRCROOT)/../../target/aarch64-apple-ios-sim/release"
+        OTHER_LDFLAGS: "-lsanctum_core"
+        SWIFT_VERSION: "5.9"
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        GENERATE_INFOPLIST_FILE: YES
+    info:
+      path: Sanctum/Info.plist
+      properties:
+        UILaunchScreen: {}
+        CFBundleURLTypes:
+          - CFBundleURLName: chat.sanctum
+            CFBundleURLSchemes: [sanctum]

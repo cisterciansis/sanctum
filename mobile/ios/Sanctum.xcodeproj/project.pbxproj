@@ -1,0 +1,316 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		214035AEA77DC22285C4EAEB /* SanctumApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5EBEB4EED7822BA38A7789B /* SanctumApp.swift */; };
+		2E338BDA63BD758AD913AA64 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 616F6AC98B07E5EA3DE3E8C4 /* ContentView.swift */; };
+		FA245B8BD222E22036729809 /* sanctum_core.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A278737BDD502296443A3DF /* sanctum_core.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		1B13BD21AFA649944971293E /* sanctum_coreFFI.modulemap */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.module-map"; path = sanctum_coreFFI.modulemap; sourceTree = "<group>"; };
+		363CF622B496E6BFE9C51596 /* sanctum_coreFFI.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = sanctum_coreFFI.h; sourceTree = "<group>"; };
+		45DC6F29EDF26C607C64FD32 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		5A278737BDD502296443A3DF /* sanctum_core.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = sanctum_core.swift; sourceTree = "<group>"; };
+		616F6AC98B07E5EA3DE3E8C4 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		872042FFF619C23367F3E8D5 /* Bridging.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Bridging.h; sourceTree = "<group>"; };
+		CD05641E48D8E5E6F7FEDEF4 /* Sanctum.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Sanctum.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F5EBEB4EED7822BA38A7789B /* SanctumApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SanctumApp.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		95550B3E2AF67FD8F35060B8 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				CD05641E48D8E5E6F7FEDEF4 /* Sanctum.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		C3BD0158A7BD3034C4DE9F0C = {
+			isa = PBXGroup;
+			children = (
+				DBF76132D5D5B64E64BDD65C /* Generated */,
+				DA5525737AB45E226D9190F8 /* Sanctum */,
+				95550B3E2AF67FD8F35060B8 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		DA5525737AB45E226D9190F8 /* Sanctum */ = {
+			isa = PBXGroup;
+			children = (
+				872042FFF619C23367F3E8D5 /* Bridging.h */,
+				616F6AC98B07E5EA3DE3E8C4 /* ContentView.swift */,
+				45DC6F29EDF26C607C64FD32 /* Info.plist */,
+				F5EBEB4EED7822BA38A7789B /* SanctumApp.swift */,
+			);
+			path = Sanctum;
+			sourceTree = "<group>";
+		};
+		DBF76132D5D5B64E64BDD65C /* Generated */ = {
+			isa = PBXGroup;
+			children = (
+				5A278737BDD502296443A3DF /* sanctum_core.swift */,
+				363CF622B496E6BFE9C51596 /* sanctum_coreFFI.h */,
+				1B13BD21AFA649944971293E /* sanctum_coreFFI.modulemap */,
+			);
+			path = Generated;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		DD6DF0F55971B2AC22E71272 /* Sanctum */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FF91AF5942C93D789F5230B1 /* Build configuration list for PBXNativeTarget "Sanctum" */;
+			buildPhases = (
+				4C16C53C619B36E652173FFF /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Sanctum;
+			packageProductDependencies = (
+			);
+			productName = Sanctum;
+			productReference = CD05641E48D8E5E6F7FEDEF4 /* Sanctum.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		7D9404CED0469F781E66F21F /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = E068CE197AE5CFA613620BC6 /* Build configuration list for PBXProject "Sanctum" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = C3BD0158A7BD3034C4DE9F0C;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 95550B3E2AF67FD8F35060B8 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				DD6DF0F55971B2AC22E71272 /* Sanctum */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		4C16C53C619B36E652173FFF /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2E338BDA63BD758AD913AA64 /* ContentView.swift in Sources */,
+				214035AEA77DC22285C4EAEB /* SanctumApp.swift in Sources */,
+				FA245B8BD222E22036729809 /* sanctum_core.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		2D649DC9CC77D93A815F660E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Sanctum/Info.plist;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/../../target/aarch64-apple-ios-sim/release";
+				OTHER_LDFLAGS = "-lsanctum_core";
+				PRODUCT_BUNDLE_IDENTIFIER = chat.sanctum.app;
+				SDKROOT = iphoneos;
+				SWIFT_OBJC_BRIDGING_HEADER = Sanctum/Bridging.h;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		444C47E977304E07314DAAF3 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		B7B4F43F29DDAA4487B61F2A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Sanctum/Info.plist;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/../../target/aarch64-apple-ios-sim/release";
+				OTHER_LDFLAGS = "-lsanctum_core";
+				PRODUCT_BUNDLE_IDENTIFIER = chat.sanctum.app;
+				SDKROOT = iphoneos;
+				SWIFT_OBJC_BRIDGING_HEADER = Sanctum/Bridging.h;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		D84E64F2C9F624894E48E14A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		E068CE197AE5CFA613620BC6 /* Build configuration list for PBXProject "Sanctum" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D84E64F2C9F624894E48E14A /* Debug */,
+				444C47E977304E07314DAAF3 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		FF91AF5942C93D789F5230B1 /* Build configuration list for PBXNativeTarget "Sanctum" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B7B4F43F29DDAA4487B61F2A /* Debug */,
+				2D649DC9CC77D93A815F660E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 7D9404CED0469F781E66F21F /* Project object */;
+}

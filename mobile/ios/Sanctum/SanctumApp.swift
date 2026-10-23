@@ -1,0 +1,126 @@
+import SwiftUI
+
+@main
+struct SanctumApp: App {
+    @StateObject private var model = AppModel()
+
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .environmentObject(model)
+                .onOpenURL { url in
+                    model.join(url.absoluteString)
+                }
+        }
+    }
+}
+
+struct ChatVM: Identifiable {
+    let id: Int64
+    var name: String
+    var waiting: Bool
+    var inviteLink: String
+    var msgs: [MsgVM]
+    var unread: Int
+}
+
+struct MsgVM: Identifiable {
+    let id: String
+    let mine: Bool
+    var delivered: Bool
+    var reaction: String?
+    let text: String
+    let ts: Date
+}
+
+func toVM(_ m: FfiMsg) -> MsgVM {
+    MsgVM(
+        id: m.wireId,
+        mine: m.mine,
+        delivered: m.delivered,
+        reaction: m.reaction,
+        text: m.text,
+        ts: Date(timeIntervalSince1970: Double(m.tsMs) / 1000.0)
+    )
+}
+
+@MainActor
+final class AppModel: ObservableObject {
+    @Published var chats: [ChatVM] = []
+    @Published var selected: Int64?
+    @Published var status = "connecting…"
+
+    private let client = Client()
+    private var timer: Timer?
+
+    init() {
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tick() }
+        }
+    }
+
+    func tick() {
+        for ev in client.pollEvents() {
+            switch ev {
+            case .snapshot(let list):
+                chats = list.map { c in
+                    ChatVM(
+                        id: c.id,
+                        name: c.name,
+                        waiting: c.waiting,
+                        inviteLink: c.inviteLink,
+                        msgs: client.snapshotMessages(contactId: c.id).map(toVM),
+                        unread: 0
+                    )
+                }
+                status = "ready"
+            case .contactAdded(let c):
+                chats.append(ChatVM(
+                    id: c.id, name: c.name, waiting: c.waiting,
+                    inviteLink: c.inviteLink, msgs: [], unread: 0
+                ))
+            case .contactRemoved(let id):
+                chats.removeAll { $0.id == id }
+            case .peerJoined(let id):
+                if let i = idx(id) {
+                    chats[i].waiting = false
+                    chats[i].inviteLink = ""
+                }
+            case .received(let id, let msg):
+                if let i = idx(id) {
+                    chats[i].msgs.append(toVM(msg))
+                    if selected != id { chats[i].unread += 1 }
+                }
+            case .delivered(let id, let wireId):
+                if let i = idx(id), let j = chats[i].msgs.firstIndex(where: { $0.id == wireId }) {
+                    chats[i].msgs[j].delivered = true
+                }
+            case .reaction(let id, let refId, let emoji):
+                if let i = idx(id), let j = chats[i].msgs.firstIndex(where: { $0.id == refId }) {
+                    chats[i].msgs[j].reaction = emoji
+                }
+            case .history(let id, let msgs):
+                if let i = idx(id) { chats[i].msgs = msgs.map(toVM) }
+            case .errorEvent(let message):
+                status = "error: \(message)"
+            }
+        }
+    }
+
+    private func idx(_ id: Int64) -> Int? { chats.firstIndex { $0.id == id } }
+
+    func send(_ text: String) {
+        guard let sel = selected, let i = idx(sel) else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        let wireId = client.send(contactId: sel, text: trimmed)
+        chats[i].msgs.append(MsgVM(
+            id: wireId, mine: true, delivered: false, reaction: nil,
+            text: trimmed, ts: Date()
+        ))
+    }
+
+    func join(_ link: String) {
+        client.acceptInvite(link: link, name: "Contact \(chats.count + 1)")
+    }
+}
