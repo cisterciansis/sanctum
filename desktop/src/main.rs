@@ -134,12 +134,15 @@ struct ChatApp {
     show_settings: bool,
     show_chat_info: bool,
     show_sidebar: bool,
+    show_plus_menu: bool,
+    show_join: bool,
     inviting: bool,
     picker_for: Option<usize>,
     chat_menu_for: Option<usize>,
     copied_at: Option<std::time::Instant>,
     input_state: Entity<InputState>,
     rename_state: Entity<InputState>,
+    join_state: Entity<InputState>,
     outbound: std::sync::mpsc::Sender<Cmd>,
     events: std::sync::mpsc::Receiver<Event>,
     _subscriptions: Vec<Subscription>,
@@ -157,6 +160,7 @@ impl ChatApp {
 
         let input_state = cx.new(|cx| InputState::new(window, cx));
         let rename_state = cx.new(|cx| InputState::new(window, cx));
+        let join_state = cx.new(|cx| InputState::new(window, cx).placeholder("sanctum://v2/…"));
         let _subscriptions = vec![cx.subscribe_in(&input_state, window, {
             move |this: &mut Self, _, ev: &InputEvent, window, cx| {
                 if let InputEvent::PressEnter { .. } = ev {
@@ -183,12 +187,15 @@ impl ChatApp {
             show_settings: false,
             show_chat_info: false,
             show_sidebar: true,
+            show_plus_menu: false,
+            show_join: false,
             inviting: false,
             picker_for: None,
             chat_menu_for: None,
             copied_at: None,
             input_state,
             rename_state,
+            join_state,
             outbound: out_tx,
             events: ev_rx,
             _subscriptions,
@@ -424,10 +431,50 @@ impl ChatApp {
                             .rounded_md()
                             .hover(|d| d.bg(rgb(p.hover)))
                             .relative()
-                            .on_click(cx.listener(|this, _, _, cx| this.new_invite(cx)))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.show_plus_menu = !this.show_plus_menu;
+                                cx.notify();
+                            }))
                             .children(Self::plus_glyph(p.sub, 24.)),
                     ),
             );
+        if self.show_plus_menu {
+            let item = |label: &str, pal_text: u32, pal_hover: u32| {
+                div()
+                    .cursor_pointer()
+                    .w_full()
+                    .px_2()
+                    .py_1()
+                    .rounded_sm()
+                    .text_sm()
+                    .text_color(rgb(pal_text))
+                    .hover(move |d| d.bg(rgb(pal_hover)))
+                    .child(label.to_string())
+            };
+            col = col.child(
+                v_flex()
+                    .w_full()
+                    .mb_1()
+                    .p_1()
+                    .rounded_md()
+                    .bg(rgb(p.bg))
+                    .border_1()
+                    .border_color(rgb(p.border))
+                    .child(item("New invite", p.text, p.hover).id("pm-new").on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.show_plus_menu = false;
+                            this.new_invite(cx);
+                        }),
+                    ))
+                    .child(item("Join with link…", p.text, p.hover).id("pm-join").on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.show_plus_menu = false;
+                            this.show_join = true;
+                            cx.notify();
+                        }),
+                    )),
+            );
+        }
         if self.chats.is_empty() && !self.inviting {
             col = col
                 .child(div().text_xs().text_color(rgb(p.sub)).child("Press + to invite someone"));
@@ -914,6 +961,62 @@ impl Render for ChatApp {
                 )
         });
 
+        let join_panel = self.show_join.then(|| {
+            h_flex()
+                .w_full()
+                .gap_2()
+                .items_center()
+                .px_3()
+                .py_3()
+                .bg(rgb(p.surface))
+                .border_b_1()
+                .border_color(rgb(p.border))
+                .child(div().text_sm().text_color(rgb(p.text)).child("Join"))
+                .child(div().flex_1().child(Input::new(&self.join_state)))
+                .child(
+                    div()
+                        .id("join-go")
+                        .cursor_pointer()
+                        .px_3()
+                        .py_1()
+                        .rounded_md()
+                        .bg(rgb(accent))
+                        .text_sm()
+                        .text_color(rgb(0xFFFFFF))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            let link = this.join_state.read(cx).value().trim().to_string();
+                            if link.starts_with("sanctum://v2/") {
+                                let n = this.chats.len();
+                                let _ = this.outbound.send(Cmd::AcceptInvite {
+                                    link,
+                                    name: format!("Contact {}", n + 1),
+                                });
+                                this.join_state.update(cx, |s, cx| s.set_value("", window, cx));
+                                window.blur(cx);
+                                this.show_join = false;
+                                cx.notify();
+                            }
+                        }))
+                        .child("Join"),
+                )
+                .child(
+                    div()
+                        .id("join-cancel")
+                        .cursor_pointer()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .text_sm()
+                        .text_color(rgb(p.sub))
+                        .hover(|d| d.bg(rgb(p.hover)))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.show_join = false;
+                            cx.notify();
+                        }))
+                        .child("Cancel"),
+                )
+        });
+
         let banner = self
             .chats
             .get(self.selected)
@@ -1189,6 +1292,7 @@ impl Render for ChatApp {
             .child(header)
             .children(settings_panel)
             .children(chat_info_panel)
+            .children(join_panel)
             .children(banner)
             .child(messages)
             .child(composer);

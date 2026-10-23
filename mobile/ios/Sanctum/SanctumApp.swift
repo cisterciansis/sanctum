@@ -49,11 +49,14 @@ final class AppModel: ObservableObject {
     @Published var chats: [ChatVM] = []
     @Published var selected: Int64?
     @Published var status = "connecting…"
+    @Published var inviting = false
+    @Published var hasToken = false
 
     private let client = Client()
     private var timer: Timer?
 
     init() {
+        hasToken = client.hasApiToken()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
@@ -75,12 +78,15 @@ final class AppModel: ObservableObject {
                 }
                 status = "ready"
             case .contactAdded(let c):
+                inviting = false
                 chats.append(ChatVM(
                     id: c.id, name: c.name, waiting: c.waiting,
                     inviteLink: c.inviteLink, msgs: [], unread: 0
                 ))
+                selected = c.id
             case .contactRemoved(let id):
                 chats.removeAll { $0.id == id }
+                if selected == id { selected = nil }
             case .peerJoined(let id):
                 if let i = idx(id) {
                     chats[i].waiting = false
@@ -102,6 +108,7 @@ final class AppModel: ObservableObject {
             case .history(let id, let msgs):
                 if let i = idx(id) { chats[i].msgs = msgs.map(toVM) }
             case .errorEvent(let message):
+                inviting = false
                 status = "error: \(message)"
             }
         }
@@ -121,6 +128,49 @@ final class AppModel: ObservableObject {
     }
 
     func join(_ link: String) {
-        client.acceptInvite(link: link, name: "Contact \(chats.count + 1)")
+        client.acceptInvite(
+            link: link.trimmingCharacters(in: .whitespacesAndNewlines),
+            name: "Contact \(chats.count + 1)"
+        )
+    }
+
+    func newInvite() {
+        guard !inviting else { return }
+        inviting = true
+        client.newInvite(name: "Contact \(chats.count + 1)")
+    }
+
+    func saveToken(_ token: String) {
+        client.setApiToken(token: token)
+        hasToken = client.hasApiToken()
+    }
+
+    func rename(_ id: Int64, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        client.rename(contactId: id, name: trimmed)
+        if let i = idx(id) { chats[i].name = trimmed }
+    }
+
+    func deleteChat(_ id: Int64) {
+        client.deleteContact(contactId: id)
+    }
+
+    func clearHistory(_ id: Int64, olderThanSecs: UInt64?) {
+        client.clearHistory(contactId: id, olderThanSecs: olderThanSecs)
+    }
+
+    func react(_ chatId: Int64, _ msg: MsgVM, _ emoji: String) {
+        client.react(contactId: chatId, refId: msg.id, emoji: emoji)
+        if let i = idx(chatId), let j = chats[i].msgs.firstIndex(where: { $0.id == msg.id }) {
+            chats[i].msgs[j].reaction = emoji
+        }
+    }
+
+    func unsend(_ chatId: Int64, _ msg: MsgVM) {
+        client.unsend(contactId: chatId, wireId: msg.id)
+        if let i = idx(chatId) {
+            chats[i].msgs.removeAll { $0.id == msg.id }
+        }
     }
 }

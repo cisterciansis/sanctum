@@ -187,6 +187,33 @@ impl Client {
             .send(Cmd::DeleteContact { contact_id });
     }
 
+    /// Store the Hippius management token (enables creating invites).
+    pub fn set_api_token(&self, token: String) {
+        let mut s = crate::demo::Settings::load();
+        s.hippius_api_token = if token.trim().is_empty() { None } else { Some(token.trim().into()) };
+        s.save();
+    }
+
+    pub fn has_api_token(&self) -> bool {
+        crate::demo::Settings::load().hippius_api_token.is_some()
+    }
+
+    pub fn set_timer(&self, contact_id: i64, secs: u64) {
+        let _ = self
+            .outbound
+            .lock()
+            .expect("outbound lock")
+            .send(Cmd::SetTimer { contact_id, secs });
+    }
+
+    pub fn clear_history(&self, contact_id: i64, older_than_secs: Option<u64>) {
+        let _ = self
+            .outbound
+            .lock()
+            .expect("outbound lock")
+            .send(Cmd::ClearHistory { contact_id, older_than_secs });
+    }
+
     pub fn unsend(&self, contact_id: i64, wire_id: String) {
         let _ = self
             .outbound

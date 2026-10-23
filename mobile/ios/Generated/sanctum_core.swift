@@ -400,6 +400,22 @@ fileprivate final class UniffiHandleMap<T>: @unchecked Sendable {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
+    typealias FfiType = UInt64
+    typealias SwiftType = UInt64
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt64 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterInt64: FfiConverterPrimitive {
     typealias FfiType = Int64
     typealias SwiftType = Int64
@@ -485,7 +501,11 @@ public protocol ClientProtocol: AnyObject, Sendable {
     
     func acceptInvite(link: String, name: String) 
     
+    func clearHistory(contactId: Int64, olderThanSecs: UInt64?) 
+    
     func deleteContact(contactId: Int64) 
+    
+    func hasApiToken()  -> Bool
     
     func newInvite(name: String) 
     
@@ -499,6 +519,13 @@ public protocol ClientProtocol: AnyObject, Sendable {
     func rename(contactId: Int64, name: String) 
     
     func send(contactId: Int64, text: String)  -> String
+    
+    /**
+     * Store the Hippius management token (enables creating invites).
+     */
+    func setApiToken(token: String) 
+    
+    func setTimer(contactId: Int64, secs: UInt64) 
     
     /**
      * History captured with the startup snapshot, per chat.
@@ -575,11 +602,26 @@ open func acceptInvite(link: String, name: String)  {try! rustCall() {
 }
 }
     
+open func clearHistory(contactId: Int64, olderThanSecs: UInt64?)  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_clear_history(self.uniffiClonePointer(),
+        FfiConverterInt64.lower(contactId),
+        FfiConverterOptionUInt64.lower(olderThanSecs),$0
+    )
+}
+}
+    
 open func deleteContact(contactId: Int64)  {try! rustCall() {
     uniffi_sanctum_core_fn_method_client_delete_contact(self.uniffiClonePointer(),
         FfiConverterInt64.lower(contactId),$0
     )
 }
+}
+    
+open func hasApiToken() -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_has_api_token(self.uniffiClonePointer(),$0
+    )
+})
 }
     
 open func newInvite(name: String)  {try! rustCall() {
@@ -623,6 +665,24 @@ open func send(contactId: Int64, text: String) -> String  {
         FfiConverterString.lower(text),$0
     )
 })
+}
+    
+    /**
+     * Store the Hippius management token (enables creating invites).
+     */
+open func setApiToken(token: String)  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_set_api_token(self.uniffiClonePointer(),
+        FfiConverterString.lower(token),$0
+    )
+}
+}
+    
+open func setTimer(contactId: Int64, secs: UInt64)  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_set_timer(self.uniffiClonePointer(),
+        FfiConverterInt64.lower(contactId),
+        FfiConverterUInt64.lower(secs),$0
+    )
+}
 }
     
     /**
@@ -1049,6 +1109,30 @@ extension FfiEvent: Equatable, Hashable {}
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
+    typealias SwiftType = UInt64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
     typealias SwiftType = String?
 
@@ -1163,7 +1247,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sanctum_core_checksum_method_client_accept_invite() != 12491) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sanctum_core_checksum_method_client_clear_history() != 59228) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sanctum_core_checksum_method_client_delete_contact() != 55898) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_has_api_token() != 59461) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_method_client_new_invite() != 55799) {
@@ -1179,6 +1269,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_method_client_send() != 42123) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_set_api_token() != 12940) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_set_timer() != 12823) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_method_client_snapshot_messages() != 34242) {
