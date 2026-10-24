@@ -76,11 +76,14 @@ final class AppModel: ObservableObject {
     @Published var hasToken = false
     @Published var settings: FfiSettings
 
-    private let client = Client()
+    // Exactly one Client: each spawns a worker, and two workers would race
+    // on the same chats' ratchet state.
+    private let client: Client
     private var timer: Timer?
 
     init() {
         let c = Client()
+        client = c
         settings = c.getSettings()
         hasToken = client.hasApiToken()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in

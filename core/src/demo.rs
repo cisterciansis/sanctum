@@ -275,7 +275,7 @@ impl Default for Settings {
 
 impl Settings {
     fn path() -> Option<String> {
-        std::env::var("HOME").ok().map(|h| format!("{h}/.sanctum/settings.json"))
+        crate::data_dir().map(|d| format!("{d}/settings.json"))
     }
 
     pub fn load() -> Self {

@@ -271,9 +271,7 @@ impl ContactSession {
     pub fn fetch_attachment(&mut self, att_key: &str, name: &str) -> Result<String, String> {
         let raw = self.mbox_in.get(att_key).map_err(|e| e.to_string())?;
         let (_, bytes) = self.unseal(&raw)?;
-        let dir = std::env::var("HOME")
-            .map(|h| format!("{h}/.sanctum/files"))
-            .map_err(|_| "no HOME".to_string())?;
+        let dir = crate::data_dir().map(|d| format!("{d}/files")).ok_or("no HOME")?;
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let safe = name.replace(['/', '\\'], "_");
         let path = format!("{dir}/{}-{safe}", ulid::Ulid::new());

@@ -84,9 +84,7 @@ pub struct Store {
 impl Store {
     /// Open (creating if needed) the encrypted store at ~/.sanctum/sanctum.db.
     pub fn open() -> Result<Self, Error> {
-        let dir = std::env::var("HOME")
-            .map(|h| format!("{h}/.sanctum"))
-            .map_err(|_| Error::Crypto("no HOME".into()))?;
+        let dir = crate::data_dir().ok_or_else(|| Error::Crypto("no HOME".into()))?;
         std::fs::create_dir_all(&dir).map_err(|e| Error::Crypto(e.to_string()))?;
         let conn = Connection::open(format!("{dir}/sanctum.db"))
             .map_err(|e| Error::Crypto(e.to_string()))?;

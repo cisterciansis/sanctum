@@ -639,7 +639,7 @@ func resolveFile(_ path: String) -> String? {
         if fm.fileExists(atPath: candidate) { return candidate }
     }
     if let r = path.range(of: "/.sanctum/") {
-        let candidate = NSHomeDirectory() + "/.sanctum/" + String(path[r.upperBound...])
+        let candidate = NSHomeDirectory() + "/Library/.sanctum/" + String(path[r.upperBound...])
         if fm.fileExists(atPath: candidate) { return candidate }
     }
     return nil

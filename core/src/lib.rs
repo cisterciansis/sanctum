@@ -35,6 +35,14 @@ pub enum Error {
     Encoding(String),
 }
 
+/// Where sanctum keeps its files: ~/.sanctum, or ~/Library/.sanctum on iOS,
+/// where the app container's root is read-only on real devices.
+pub fn data_dir() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let base = if cfg!(target_os = "ios") { format!("{home}/Library") } else { home };
+    Some(format!("{base}/.sanctum"))
+}
+
 /// A user identity: one X25519 keypair. v1 envelopes use it directly as a
 /// static box key; v2 (`Ratchet`) uses the same key as the Signal identity.
 pub struct Identity {
