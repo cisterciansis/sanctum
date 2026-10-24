@@ -1,7 +1,8 @@
 //! sanctum-tui — multi-chat terminal client over the encrypted store.
 //! Keys: Tab switch chat · Ctrl-N new invite · paste sanctum://v2/… to join
 //! · /file <path> attach · Ctrl-R react · Ctrl-U unsend · Ctrl-S settings
-//! · Esc quit.
+//! (also lists every command) · /delete removes a chat · Ctrl-Y copies the
+//! invite link · /timer sets a custom disappearing timer · Esc quit.
 
 use std::io;
 use std::time::Duration;
@@ -16,7 +17,7 @@ use ratatui::{
     DefaultTerminal, Frame,
 };
 use sanctum_core::contact::{spawn_worker, Cmd, Event};
-use sanctum_core::demo::Settings;
+use sanctum_core::demo::{self, Settings};
 use sanctum_core::store::StoredMsg;
 
 const REACTIONS: [&str; 6] = ["👍", "👎", "❤️", "‼️", "❓", "😂"];
@@ -65,6 +66,53 @@ struct Chat {
     unread: u32,
 }
 
+/// Shown under Settings (Ctrl-S); keep in step with `submit` and `run`.
+const COMMANDS: &[(&str, &str)] = &[
+    ("Ctrl-N", "new invite link (copied for you)"),
+    ("Ctrl-Y", "copy this chat's invite link"),
+    ("sanctum://…", "paste an invite to join"),
+    ("Tab", "next chat"),
+    ("Ctrl-R 1-6", "react to the last message"),
+    ("Ctrl-U", "unsend your last undelivered message"),
+    ("Ctrl-S", "settings and this list"),
+    ("Esc", "quit"),
+    ("/file <path>", "send a file (up to 25 MB)"),
+    ("/name <name>", "rename this chat"),
+    ("/group <size> <name>", "new group (2-6 seats)"),
+    ("/clear", "clear this chat's history"),
+    ("/clearweek", "clear messages older than a week"),
+    ("/delete", "delete this chat (asks to confirm)"),
+    ("/timer <time>", "disappearing: off, 90m, 2w, 6mo... (1 min to 1 year)"),
+];
+
+/// System clipboard via the platform tool; else OSC 52, which most
+/// terminals (iTerm2, kitty, WezTerm, Ghostty, tmux) honour, even over SSH.
+fn copy_to_clipboard(text: &str) -> bool {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let tools: &[(&str, &[&str])] =
+        &[("pbcopy", &[]), ("wl-copy", &[]), ("xclip", &["-selection", "clipboard"])];
+    for (tool, args) in tools {
+        let Ok(mut child) = Command::new(tool)
+            .args(*args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        else {
+            continue;
+        };
+        let wrote = child.stdin.take().is_some_and(|mut i| i.write_all(text.as_bytes()).is_ok());
+        if wrote && child.wait().is_ok_and(|s| s.success()) {
+            return true;
+        }
+    }
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(text);
+    let mut out = io::stdout();
+    write!(out, "\x1b]52;c;{b64}\x07").and_then(|_| out.flush()).is_ok()
+}
+
 struct App {
     chats: Vec<Chat>,
     selected: usize,
@@ -73,6 +121,8 @@ struct App {
     show_settings: bool,
     react_mode: bool,
     inviting: bool,
+    /// Chat armed by a first `/delete`; a second one confirms.
+    pending_delete: Option<i64>,
     input: String,
     outbound: std::sync::mpsc::Sender<Cmd>,
     events: std::sync::mpsc::Receiver<Event>,
@@ -97,6 +147,7 @@ impl App {
             show_settings: false,
             react_mode: false,
             inviting: false,
+            pending_delete: None,
             input: String::new(),
             outbound: out_tx,
             events: ev_rx,
@@ -129,7 +180,7 @@ impl App {
                     self.status = "end-to-end encrypted · hippius".into();
                 }
                 Event::ContactAdded(c) => {
-                    self.inviting = false;
+                    let ours = std::mem::take(&mut self.inviting) && !c.invite_link.is_empty();
                     self.chats.push(Chat {
                         id: c.id,
                         name: c.name,
@@ -139,6 +190,9 @@ impl App {
                         unread: 0,
                     });
                     self.selected = self.chats.len() - 1;
+                    if ours {
+                        self.copy_invite();
+                    }
                 }
                 Event::PeerJoined { contact_id } => {
                     if let Some(c) = self.chat_by_id(contact_id) {
@@ -232,6 +286,28 @@ impl App {
             self.input.clear();
             return;
         }
+        // Deleting retires the chat's buckets for good, so it takes two.
+        let armed = self.pending_delete.take();
+        if text == "/delete" {
+            if armed == Some(sel) {
+                let _ = self.outbound.send(Cmd::DeleteContact { contact_id: sel });
+                self.status = "chat deleted".into();
+            } else {
+                self.pending_delete = Some(sel);
+                let name = self.chats[self.selected].name.clone();
+                self.status = format!("delete '{name}' and its history? /delete again to confirm");
+            }
+            self.input.clear();
+            return;
+        }
+        if let Some(t) = text.strip_prefix("/timer ") {
+            match demo::parse_disappear(t) {
+                Some(secs) => self.set_timer(secs),
+                None => self.status = "timer: off, or 1 minute to 1 year, e.g. 90m, 2w, 6mo".into(),
+            }
+            self.input.clear();
+            return;
+        }
         if text == "/clear" || text == "/clearweek" {
             let older = (text == "/clearweek").then_some(7 * 86400);
             let _ = self.outbound.send(Cmd::ClearHistory { contact_id: sel, older_than_secs: older });
@@ -259,6 +335,28 @@ impl App {
             let _ = self.outbound.send(Cmd::Send { contact_id: sel, wire_id, text });
         }
         self.input.clear();
+    }
+
+    /// Copy the selected chat's (first open) invite link to the clipboard.
+    fn copy_invite(&mut self) {
+        let link = self.chats.get(self.selected).and_then(|c| {
+            c.invite_link.split('\n').find(|l| !l.is_empty()).map(str::to_string)
+        });
+        self.status = match link {
+            Some(link) if copy_to_clipboard(&link) => "invite link copied — paste it to them".into(),
+            Some(_) => "couldn't reach the clipboard".into(),
+            None => "this chat has no open invite".into(),
+        };
+    }
+
+    /// Apply a validated timer locally and sync it to the selected chat.
+    fn set_timer(&mut self, secs: u64) {
+        self.settings.disappear_secs = secs;
+        self.settings.save();
+        if let Some(c) = self.chats.get(self.selected) {
+            let _ = self.outbound.send(Cmd::SetTimer { contact_id: c.id, secs });
+        }
+        self.status = format!("disappearing messages: {}", demo::disappear_label(secs));
     }
 
     fn push_own(&mut self, wire_id: &str, text: String) {
@@ -363,7 +461,7 @@ impl App {
             .get(self.selected)
             .map(|c| c.name.clone())
             .unwrap_or_else(|| "Sanctum".into());
-        let hint = "tab switch · ^N invite · ^R react · ^U unsend · ^S settings · esc quit";
+        let hint = "tab switch · ^N invite · ^R react · ^U unsend · ^S settings & commands · esc quit";
         let top = Line::from(vec![
             Span::raw(" "),
             Span::raw(title).bold(),
@@ -398,7 +496,7 @@ impl App {
         if let Some(c) = self.chats.get(self.selected) {
             if !c.invite_link.trim().is_empty() {
                 lines.push(Line::from(Span::styled(
-                    " Waiting for them to join. Send this invite link:",
+                    " Waiting for them to join. Send this invite link (Ctrl-Y copies it):",
                     Style::default().fg(Color::Yellow),
                 )));
                 for (n, one) in c.invite_link.split('\n').enumerate() {
@@ -496,13 +594,8 @@ impl App {
                 self.settings.proxy_url
             )),
             Line::raw(format!(
-                "  3 · Disappearing msgs     [{}]",
-                match self.settings.disappear_secs {
-                    0 => "off",
-                    60 => "1m",
-                    3600 => "1h",
-                    _ => "1d",
-                }
+                "  3 · Disappearing msgs     [{}]  · /timer <time> for custom",
+                demo::disappear_label(self.settings.disappear_secs)
             )),
             Line::from(Span::styled(
                 "  4 · Typing indicators     coming soon",
@@ -513,8 +606,17 @@ impl App {
                 "  press 1/2/3 to toggle · esc to close",
                 Style::default().fg(Color::DarkGray),
             )),
+            Line::raw(""),
+            Line::from(Span::raw("  Commands").bold()),
+            Line::raw(""),
         ];
-        f.render_widget(Paragraph::new(rows), body);
+        let rows = rows.into_iter().chain(COMMANDS.iter().map(|(cmd, what)| {
+            Line::from(vec![
+                Span::raw(format!("  {cmd:<22}")),
+                Span::styled(*what, Style::default().fg(Color::DarkGray)),
+            ])
+        }));
+        f.render_widget(Paragraph::new(rows.collect::<Vec<_>>()), body);
         f.render_widget(Paragraph::new("").block(Block::default().borders(Borders::ALL)), composer);
     }
 
@@ -546,19 +648,7 @@ impl App {
                                 self.settings.save();
                             }
                             KeyCode::Char('3') => {
-                                self.settings.disappear_secs = match self.settings.disappear_secs {
-                                    0 => 60,
-                                    60 => 3600,
-                                    3600 => 86400,
-                                    _ => 0,
-                                };
-                                self.settings.save();
-                                if let Some(c) = self.chats.get(self.selected) {
-                                    let _ = self.outbound.send(Cmd::SetTimer {
-                                        contact_id: c.id,
-                                        secs: self.settings.disappear_secs,
-                                    });
-                                }
+                                self.set_timer(demo::next_disappear_preset(self.settings.disappear_secs))
                             }
                             _ => {}
                         }
@@ -585,6 +675,7 @@ impl App {
                             }
                         }
                         (KeyCode::Char('u'), KeyModifiers::CONTROL) => self.unsend_last(),
+                        (KeyCode::Char('y'), KeyModifiers::CONTROL) => self.copy_invite(),
                         (KeyCode::Char('r'), KeyModifiers::CONTROL) => self.react_mode = true,
                         (KeyCode::Char('s'), KeyModifiers::CONTROL) => self.show_settings = true,
                         (KeyCode::Enter, _) => self.submit(),

@@ -78,6 +78,23 @@ pub struct Client {
     history: Mutex<std::collections::HashMap<i64, Vec<FfiMsg>>>,
 }
 
+/// Disappearing-message presets (seconds; 0 = off), shared by all clients.
+#[uniffi::export]
+pub fn disappear_presets() -> Vec<u64> {
+    crate::demo::DISAPPEAR_PRESETS.to_vec()
+}
+
+/// Custom timer like "90m" or "6mo"; None unless off or 1 minute to 1 year.
+#[uniffi::export]
+pub fn parse_disappear(input: String) -> Option<u64> {
+    crate::demo::parse_disappear(&input)
+}
+
+#[uniffi::export]
+pub fn disappear_label(secs: u64) -> String {
+    crate::demo::disappear_label(secs)
+}
+
 #[uniffi::export]
 impl Client {
     #[uniffi::constructor]

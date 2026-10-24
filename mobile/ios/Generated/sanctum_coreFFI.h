@@ -352,6 +352,22 @@ RustBuffer uniffi_sanctum_core_fn_method_client_snapshot_messages(void*_Nonnull 
 void uniffi_sanctum_core_fn_method_client_unsend(void*_Nonnull ptr, int64_t contact_id, RustBuffer wire_id, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_DISAPPEAR_LABEL
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_DISAPPEAR_LABEL
+RustBuffer uniffi_sanctum_core_fn_func_disappear_label(uint64_t secs, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_DISAPPEAR_PRESETS
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_DISAPPEAR_PRESETS
+RustBuffer uniffi_sanctum_core_fn_func_disappear_presets(RustCallStatus *_Nonnull out_status
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_PARSE_DISAPPEAR
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_PARSE_DISAPPEAR
+RustBuffer uniffi_sanctum_core_fn_func_parse_disappear(RustBuffer input, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_FFI_SANCTUM_CORE_RUSTBUFFER_ALLOC
 #define UNIFFI_FFIDEF_FFI_SANCTUM_CORE_RUSTBUFFER_ALLOC
 RustBuffer ffi_sanctum_core_rustbuffer_alloc(uint64_t size, RustCallStatus *_Nonnull out_status
@@ -630,6 +646,24 @@ void ffi_sanctum_core_rust_future_free_void(uint64_t handle
 #ifndef UNIFFI_FFIDEF_FFI_SANCTUM_CORE_RUST_FUTURE_COMPLETE_VOID
 #define UNIFFI_FFIDEF_FFI_SANCTUM_CORE_RUST_FUTURE_COMPLETE_VOID
 void ffi_sanctum_core_rust_future_complete_void(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_DISAPPEAR_LABEL
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_DISAPPEAR_LABEL
+uint16_t uniffi_sanctum_core_checksum_func_disappear_label(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_DISAPPEAR_PRESETS
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_DISAPPEAR_PRESETS
+uint16_t uniffi_sanctum_core_checksum_func_disappear_presets(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_PARSE_DISAPPEAR
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_PARSE_DISAPPEAR
+uint16_t uniffi_sanctum_core_checksum_func_parse_disappear(void
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_ACCEPT_INVITE

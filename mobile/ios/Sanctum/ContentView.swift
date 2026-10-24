@@ -360,7 +360,42 @@ struct ChatView: View {
     @State private var showFileImporter = false
     @State private var showRename = false
     @State private var renameText = ""
+    @State private var showCustomTimer = false
+    @State private var customTimer = ""
+    @State private var timerInvalid = false
+
     @State private var reveal: CGFloat = 0
+
+    /// Presets and labels come from the core, so every client matches.
+    private var timerMenu: some View {
+        Menu {
+            let current = model.settings.disappearSecs
+            let presets = disappearPresets()
+            ForEach(presets, id: \.self) { secs in
+                Button {
+                    model.setDisappear(secs)
+                } label: {
+                    if current == secs {
+                        Label(disappearLabel(secs: secs), systemImage: "checkmark")
+                    } else {
+                        Text(disappearLabel(secs: secs))
+                    }
+                }
+            }
+            Button {
+                customTimer = ""
+                showCustomTimer = true
+            } label: {
+                if presets.contains(current) {
+                    Text("Custom…")
+                } else {
+                    Label("Custom: \(disappearLabel(secs: current))", systemImage: "checkmark")
+                }
+            }
+        } label: {
+            Label("Disappearing Messages", systemImage: "timer")
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -528,21 +563,7 @@ struct ChatView: View {
                         }
                     }
                     if chat.id >= 0 {
-                        Menu {
-                            ForEach([(UInt64(0), "Off"), (60, "1 minute"), (3600, "1 hour"), (86400, "1 day")], id: \.0) { secs, label in
-                                Button {
-                                    model.setDisappear(secs)
-                                } label: {
-                                    if model.settings.disappearSecs == secs {
-                                        Label(label, systemImage: "checkmark")
-                                    } else {
-                                        Text(label)
-                                    }
-                                }
-                            }
-                        } label: {
-                            Label("Disappearing Messages", systemImage: "timer")
-                        }
+                        timerMenu
                     }
                     Button {
                         model.clearHistory(chat.id, olderThanSecs: nil)
@@ -565,6 +586,42 @@ struct ChatView: View {
             Button("Save") { model.rename(chat.id, to: renameText) }
             Button("Cancel", role: .cancel) {}
         }
+        .modifier(CustomTimerAlerts(
+            show: $showCustomTimer, text: $customTimer, invalid: $timerInvalid
+        ) { model.setDisappear($0) })
+    }
+}
+
+/// Custom disappearing timer entry; the core parses and bounds-checks it.
+/// (Its own modifier keeps ChatView's body within the type checker's budget.)
+struct CustomTimerAlerts: ViewModifier {
+    @Binding var show: Bool
+    @Binding var text: String
+    @Binding var invalid: Bool
+    let apply: (UInt64) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .alert("Custom timer", isPresented: $show) {
+                TextField("90m, 2w, 6mo", text: $text)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Button("Set") {
+                    if let secs = parseDisappear(input: text) {
+                        apply(secs)
+                    } else {
+                        invalid = true
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Anything from 1 minute to 1 year.")
+            }
+            .alert("Invalid timer", isPresented: $invalid) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Use off, or 1 minute to 1 year, like 90m, 36h, 2w, 6mo or 1y.")
+            }
     }
 }
 

@@ -295,6 +295,66 @@ impl Settings {
     }
 }
 
+/// Disappearing-message presets every client offers (seconds; 0 = off).
+pub const DISAPPEAR_PRESETS: [u64; 5] = [0, 60, 3600, DAY, 30 * DAY];
+/// Bounds for a custom timer: one minute to one year.
+pub const DISAPPEAR_MIN: u64 = 60;
+pub const DISAPPEAR_MAX: u64 = 365 * DAY;
+const DAY: u64 = 86_400;
+
+/// Off, or within the custom bounds. Checked on every timer a peer sends:
+/// an unchecked huge value overflowed the purge cutoff and wiped history.
+pub fn disappear_ok(secs: u64) -> bool {
+    secs == 0 || (DISAPPEAR_MIN..=DISAPPEAR_MAX).contains(&secs)
+}
+
+/// Parses "off", "90m", "36 hours", "2w", "6mo", "1y"; None if malformed or
+/// out of bounds. A month is 30 days, a year 365.
+pub fn parse_disappear(input: &str) -> Option<u64> {
+    let s = input.trim().to_ascii_lowercase();
+    if s == "off" {
+        return Some(0);
+    }
+    let split = s.find(|c: char| !c.is_ascii_digit())?;
+    let n: u64 = s[..split].parse().ok()?;
+    let unit = match s[split..].trim() {
+        "s" | "sec" | "secs" | "second" | "seconds" => 1,
+        "m" | "min" | "mins" | "minute" | "minutes" => 60,
+        "h" | "hr" | "hrs" | "hour" | "hours" => 3600,
+        "d" | "day" | "days" => DAY,
+        "w" | "wk" | "wks" | "week" | "weeks" => 7 * DAY,
+        "mo" | "month" | "months" => 30 * DAY,
+        "y" | "yr" | "yrs" | "year" | "years" => 365 * DAY,
+        _ => return None,
+    };
+    n.checked_mul(unit).filter(|&secs| secs > 0 && disappear_ok(secs))
+}
+
+/// "Off", "1 month", "90 minutes": the largest unit that divides exactly.
+pub fn disappear_label(secs: u64) -> String {
+    if secs == 0 {
+        return "Off".into();
+    }
+    let units = [
+        (365 * DAY, "year"),
+        (30 * DAY, "month"),
+        (7 * DAY, "week"),
+        (DAY, "day"),
+        (3600, "hour"),
+        (60, "minute"),
+        (1, "second"),
+    ];
+    let (unit, name) = units.into_iter().find(|(u, _)| secs % u == 0).expect("1 divides");
+    let n = secs / unit;
+    format!("{n} {name}{}", if n == 1 { "" } else { "s" })
+}
+
+/// The preset after `secs` (custom values restart the cycle at off).
+pub fn next_disappear_preset(secs: u64) -> u64 {
+    let i = DISAPPEAR_PRESETS.iter().position(|&p| p == secs).map_or(0, |i| i + 1);
+    DISAPPEAR_PRESETS[i % DISAPPEAR_PRESETS.len()]
+}
+
 /// Commands a UI sends to the worker. `id` is the UI's local handle;
 /// `wire_id` names the message across devices (reaction/edit references).
 pub enum Cmd {
@@ -413,4 +473,28 @@ pub fn spawn_worker(outbound: Receiver<Cmd>, events: Sender<Event>) {
             std::thread::sleep(Duration::from_millis(1500));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disappear_parsing_and_bounds() {
+        assert_eq!(parse_disappear("off"), Some(0));
+        assert_eq!(parse_disappear(" 90m "), Some(5400));
+        assert_eq!(parse_disappear("2 Weeks"), Some(14 * DAY));
+        assert_eq!(parse_disappear("1y"), Some(DISAPPEAR_MAX));
+        assert_eq!(parse_disappear("60s"), Some(DISAPPEAR_MIN));
+        for bad in ["59s", "0m", "366d", "2y", "90", "m", "5 parsecs", "-1h", "99999999999999999999y"] {
+            assert_eq!(parse_disappear(bad), None, "{bad}");
+        }
+        assert!(!disappear_ok(u64::MAX) && !disappear_ok(30) && disappear_ok(0));
+        assert_eq!(disappear_label(30 * DAY), "1 month");
+        assert_eq!(disappear_label(5400), "90 minutes");
+        assert_eq!(disappear_label(DISAPPEAR_MAX), "1 year");
+        assert_eq!(next_disappear_preset(DAY), 30 * DAY);
+        assert_eq!(next_disappear_preset(30 * DAY), 0);
+        assert_eq!(next_disappear_preset(5400), 0);
+    }
 }

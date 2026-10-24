@@ -1352,6 +1352,31 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceUInt64: FfiConverterRustBuffer {
+    typealias SwiftType = [UInt64]
+
+    public static func write(_ value: [UInt64], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterUInt64.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [UInt64] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [UInt64]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterUInt64.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeFfiContact: FfiConverterRustBuffer {
     typealias SwiftType = [FfiContact]
 
@@ -1423,6 +1448,32 @@ fileprivate struct FfiConverterSequenceTypeFfiEvent: FfiConverterRustBuffer {
         return seq
     }
 }
+public func disappearLabel(secs: UInt64) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_sanctum_core_fn_func_disappear_label(
+        FfiConverterUInt64.lower(secs),$0
+    )
+})
+}
+/**
+ * Disappearing-message presets (seconds; 0 = off), shared by all clients.
+ */
+public func disappearPresets() -> [UInt64]  {
+    return try!  FfiConverterSequenceUInt64.lift(try! rustCall() {
+    uniffi_sanctum_core_fn_func_disappear_presets($0
+    )
+})
+}
+/**
+ * Custom timer like "90m" or "6mo"; None unless off or 1 minute to 1 year.
+ */
+public func parseDisappear(input: String) -> UInt64?  {
+    return try!  FfiConverterOptionUInt64.lift(try! rustCall() {
+    uniffi_sanctum_core_fn_func_parse_disappear(
+        FfiConverterString.lower(input),$0
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -1438,6 +1489,15 @@ private let initializationResult: InitializationResult = {
     let scaffolding_contract_version = ffi_sanctum_core_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
+    }
+    if (uniffi_sanctum_core_checksum_func_disappear_label() != 51845) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_func_disappear_presets() != 48558) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_func_parse_disappear() != 6956) {
+        return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_method_client_accept_invite() != 12491) {
         return InitializationResult.apiChecksumMismatch

@@ -14,7 +14,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::{prelude::FluentBuilder as _, *};
 use sanctum_core::contact::{spawn_worker, Cmd, Event};
-use sanctum_core::demo::Settings;
+use sanctum_core::demo::{self, Settings};
 use sanctum_core::store::StoredMsg;
 
 const REACTIONS: [&str; 6] = ["👍", "👎", "❤️", "‼️", "❓", "😂"];
@@ -154,6 +154,7 @@ struct ChatApp {
     rename_state: Entity<InputState>,
     join_state: Entity<InputState>,
     group_state: Entity<InputState>,
+    timer_state: Entity<InputState>,
     outbound: std::sync::mpsc::Sender<Cmd>,
     events: std::sync::mpsc::Receiver<Event>,
     _subscriptions: Vec<Subscription>,
@@ -173,6 +174,7 @@ impl ChatApp {
         let rename_state = cx.new(|cx| InputState::new(window, cx));
         let join_state = cx.new(|cx| InputState::new(window, cx).placeholder("sanctum://…"));
         let group_state = cx.new(|cx| InputState::new(window, cx).placeholder("Group name"));
+        let timer_state = cx.new(|cx| InputState::new(window, cx).placeholder("90m, 2w, 6mo"));
         let _subscriptions = vec![cx.subscribe_in(&input_state, window, {
             move |this: &mut Self, _, ev: &InputEvent, window, cx| {
                 if let InputEvent::PressEnter { .. } = ev {
@@ -213,6 +215,7 @@ impl ChatApp {
             rename_state,
             join_state,
             group_state,
+            timer_state,
             outbound: out_tx,
             events: ev_rx,
             _subscriptions,
@@ -334,6 +337,15 @@ impl ChatApp {
 
     fn selected_id(&self) -> Option<i64> {
         self.chats.get(self.selected).map(|c| c.id)
+    }
+
+    /// Apply a validated timer locally and sync it to the selected chat.
+    fn set_timer(&mut self, secs: u64) {
+        self.settings.disappear_secs = secs;
+        self.settings.save();
+        if let Some(id) = self.selected_id() {
+            let _ = self.outbound.send(Cmd::SetTimer { contact_id: id, secs });
+        }
     }
 
     fn send_current(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -926,29 +938,48 @@ impl Render for ChatApp {
                         .child(
                             Button::new("set-disappear")
                                 .outline()
-                                .label(match self.settings.disappear_secs {
-                                    0 => "Off",
-                                    60 => "1 min",
-                                    3600 => "1 hour",
-                                    _ => "1 day",
-                                })
+                                .label(demo::disappear_label(self.settings.disappear_secs))
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.settings.disappear_secs =
-                                        match this.settings.disappear_secs {
-                                            0 => 60,
-                                            60 => 3600,
-                                            3600 => 86400,
-                                            _ => 0,
-                                        };
-                                    this.settings.save();
-                                    if let Some(id) = this.selected_id() {
-                                        let _ = this.outbound.send(Cmd::SetTimer {
-                                            contact_id: id,
-                                            secs: this.settings.disappear_secs,
-                                        });
-                                    }
+                                    this.set_timer(demo::next_disappear_preset(
+                                        this.settings.disappear_secs,
+                                    ));
                                     cx.notify();
                                 })),
+                        ),
+                )
+                .child(
+                    row("Custom timer", Some("1 minute to 1 year"))
+                        .child(div().w(px(160.)).child(Input::new(&self.timer_state)))
+                        .child(
+                            div()
+                                .id("timer-set")
+                                .cursor_pointer()
+                                .px_3()
+                                .py_1()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(rgb(p.border))
+                                .hover(|d| d.bg(rgb(p.hover)))
+                                .text_sm()
+                                .text_color(rgb(p.text))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    let text = this.timer_state.read(cx).value().to_string();
+                                    match demo::parse_disappear(&text) {
+                                        Some(secs) => {
+                                            this.set_timer(secs);
+                                            this.timer_state
+                                                .update(cx, |s, cx| s.set_value("", window, cx));
+                                            window.blur(cx);
+                                        }
+                                        None => {
+                                            this.status =
+                                                "error: timer must be off or 1 minute to 1 year, e.g. 90m, 2w, 6mo"
+                                                    .into();
+                                        }
+                                    }
+                                    cx.notify();
+                                }))
+                                .child("Set"),
                         ),
                 )
                 .children(self.selected_id().map(|id| {

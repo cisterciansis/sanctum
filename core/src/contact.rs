@@ -482,7 +482,7 @@ pub fn spawn_worker(
             }
 
             let settings = crate::demo::Settings::load();
-            if settings.disappear_secs > 0 {
+            if settings.disappear_secs > 0 && crate::demo::disappear_ok(settings.disappear_secs) {
                 let _ = store.purge_older_than(settings.disappear_secs);
             }
             std::thread::sleep(std::time::Duration::from_millis(1500));
@@ -715,6 +715,9 @@ fn handle_cmd(
             }
         }
         Cmd::SetTimer { contact_id, secs } => {
+            if !crate::demo::disappear_ok(secs) {
+                return send_err("timer must be off or between 1 minute and 1 year".into());
+            }
             let Some(l) = live.iter_mut().find(|l| l.contact.id == contact_id) else { return };
             if let Err(e) = l.session.set_timer(secs) {
                 send_err(e);
@@ -899,12 +902,14 @@ fn handle_item(item: ChatItem, l: &mut Live, store: &Store, events: &std::sync::
             let _ = store.set_reaction(cid, &ref_id, &emoji);
             let _ = events.send(Event::Reaction { contact_id: cid, ref_id, emoji });
         }
-        ChatItem::Timer { secs } => {
+        // Peer-controlled: apply only a valid timer.
+        ChatItem::Timer { secs } if crate::demo::disappear_ok(secs) => {
             let mut s = crate::demo::Settings::load();
             s.disappear_secs = secs;
             s.save();
             let _ = events.send(Event::TimerChanged { contact_id: cid, secs });
         }
+        ChatItem::Timer { .. } => {}
     }
 }
 
