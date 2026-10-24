@@ -6,6 +6,9 @@ An invite link carries everything the other person needs — no account, no
 signup, no phone number. Nothing to run, nothing to trust, nothing to shut
 down.
 
+Chats use the Signal protocol ([libsignal](https://github.com/signalapp/libsignal)
+PQXDH + double ratchet): forward secrecy and a post-quantum handshake.
+
 ## Install
 
 ```sh

@@ -1,15 +1,14 @@
 // Headless host for the iOS demo: mints an invite, waits for the phone's
 // hello, greets it, then echoes anything the phone sends.
-use sanctum_core::contact::{create_invite, ChatItem, ContactSession};
+use sanctum_core::contact::{create_invite, ChatItem};
 use sanctum_core::provision::Provisioner;
 use sanctum_core::Identity;
 
 fn main() {
     let p = Provisioner::from_settings().expect("needs hippius_api_token");
     let me = Identity::generate();
-    let (contact, link) = create_invite(&p, &me, "iPhone").expect("invite");
+    let (_, link, mut sess) = create_invite(&p, &me, "iPhone").expect("invite");
     println!("INVITE:{link}");
-    let mut sess = ContactSession::new(&contact, &me).expect("session");
     let t0 = std::time::Instant::now();
     loop {
         for item in sess.poll() {

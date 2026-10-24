@@ -10,9 +10,12 @@ use crate::crypto_box::PublicKey;
 use crate::provision::Provisioner;
 use crate::store::{Contact, Store, StoredMsg};
 use crate::transport::Mailbox;
-use crate::{open, seal, Identity};
+use crate::{open, seal, Identity, Ratchet};
 
 pub const SCHEME_V2: &str = "sanctum://v2/";
+
+/// Object in `to_acceptor` holding the inviter's v2 key bundle.
+const BUNDLE_KEY: &str = "bundle";
 
 /// Everything the invitee needs: their two queues, a capability over both,
 /// and the inviter's public key.
@@ -26,6 +29,10 @@ pub struct Invite2 {
     pub s: String,
     pub pk: String,
     pub e: String,
+    /// Envelope version the inviter speaks; 2 means a key bundle waits at
+    /// `BUNDLE_KEY` in `to_acceptor`. Absent (0) on pre-v2 links.
+    #[serde(default)]
+    pub v: u8,
 }
 
 impl Invite2 {
@@ -44,8 +51,13 @@ impl Invite2 {
 }
 
 /// Inviter side: mint two queue buckets and two capabilities (one stays
-/// local, one ships in the invite). Returns the contact row + the link.
-pub fn create_invite(p: &Provisioner, me: &Identity, name: &str) -> Result<(Contact, String), String> {
+/// local, one ships in the invite) and publish a v2 key bundle. Returns the
+/// contact row, the link and the live session.
+pub fn create_invite(
+    p: &Provisioner,
+    me: &Identity,
+    name: &str,
+) -> Result<(Contact, String, ContactSession), String> {
     let pair = ulid::Ulid::new().to_string().to_lowercase();
     let to_inviter = format!("q-{pair}-a");
     let to_acceptor = format!("q-{pair}-b");
@@ -64,6 +76,7 @@ pub fn create_invite(p: &Provisioner, me: &Identity, name: &str) -> Result<(Cont
         s: peer_secret,
         pk: B64.encode(me.public().as_bytes()),
         e: crate::transport::DEFAULT_ENDPOINT.into(),
+        v: 2,
     };
     let link = invite.to_link();
     let contact = Contact {
@@ -77,11 +90,19 @@ pub fn create_invite(p: &Provisioner, me: &Identity, name: &str) -> Result<(Cont
         endpoint: crate::transport::DEFAULT_ENDPOINT.into(),
         invite_link: link.clone(),
     };
-    Ok((contact, link))
+    let (ratchet, bundle) = Ratchet::offer(me).map_err(|e| e.to_string())?;
+    let session = ContactSession::new(&contact, me, Some(ratchet))?;
+    session.mbox_out.put(BUNDLE_KEY, &bundle).map_err(|e| e.to_string())?;
+    Ok((contact, link, session))
 }
 
-/// Acceptor side: adopt the capabilities and announce our public key.
-pub fn accept_invite(link: &str, me: &Identity, name: &str) -> Result<Contact, String> {
+/// Acceptor side: adopt the capabilities and announce our public key — as
+/// the first v2 (PQXDH) message when the inviter published a bundle.
+pub fn accept_invite(
+    link: &str,
+    me: &Identity,
+    name: &str,
+) -> Result<(Contact, ContactSession), String> {
     let inv = Invite2::from_link(link)?;
     let contact = Contact {
         id: 0,
@@ -94,18 +115,30 @@ pub fn accept_invite(link: &str, me: &Identity, name: &str) -> Result<Contact, S
         endpoint: inv.e.clone(),
         invite_link: String::new(),
     };
-    let session = ContactSession::new(&contact, me)?;
+    let mut session = ContactSession::new(&contact, me, None)?;
+    if inv.v >= 2 {
+        let bundle = session.mbox_in.get(BUNDLE_KEY).map_err(|e| e.to_string())?;
+        let inviter = session.peer_pk.as_ref().ok_or("invite has no key")?;
+        session.ratchet = Some(Ratchet::accept(me, &bundle, inviter).map_err(|e| e.to_string())?);
+    }
     session.deposit(&serde_json::json!({
         "t": "hello",
         "pk": B64.encode(me.public().as_bytes()),
     }))?;
-    Ok(contact)
+    if session.ratchet.is_some() {
+        let _ = session.mbox_in.delete(BUNDLE_KEY);
+    }
+    Ok((contact, session))
 }
 
 /// One live conversation: poll bucket_in, write bucket_out.
 pub struct ContactSession {
     me_secret: String,
     peer_pk: Option<PublicKey>,
+    /// v2 session; None for pre-v2 contacts, which stay on v1 envelopes.
+    ratchet: Option<Ratchet>,
+    /// Ratchet state changed since the last `ratchet_update`.
+    dirty: bool,
     mbox_in: Mailbox,
     mbox_out: Mailbox,
 }
@@ -119,7 +152,7 @@ pub enum ChatItem {
 }
 
 impl ContactSession {
-    pub fn new(c: &Contact, me: &Identity) -> Result<Self, String> {
+    pub fn new(c: &Contact, me: &Identity, ratchet: Option<Ratchet>) -> Result<Self, String> {
         let peer_pk = if c.peer_pk.is_empty() {
             None
         } else {
@@ -133,6 +166,8 @@ impl ContactSession {
         Ok(Self {
             me_secret: me.to_b64(),
             peer_pk,
+            dirty: ratchet.is_some(),
+            ratchet,
             mbox_in: Mailbox::new(&c.endpoint, &c.bucket_in, &c.access_key, &c.secret)
                 .map_err(|e| e.to_string())?,
             mbox_out: Mailbox::new(&c.endpoint, &c.bucket_out, &c.access_key, &c.secret)
@@ -158,29 +193,65 @@ impl ContactSession {
         self.peer_pk.is_some()
     }
 
-    fn deposit(&self, body: &serde_json::Value) -> Result<String, String> {
-        let pk = self.peer_pk.as_ref().ok_or("contact hasn't joined yet")?;
-        let sealed = seal(&self.me(), pk, body.to_string().as_bytes()).map_err(|e| e.to_string())?;
+    /// Ratchet state to persist, if a send or receive advanced it.
+    pub fn ratchet_update(&mut self) -> Option<String> {
+        if !std::mem::take(&mut self.dirty) {
+            return None;
+        }
+        self.ratchet.as_ref()?.save().ok()
+    }
+
+    /// v2 once a ratchet session exists, else v1 to the peer's static key.
+    fn seal(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, String> {
+        match &mut self.ratchet {
+            Some(r) if r.ready() => {
+                self.dirty = true;
+                r.seal(plaintext).map_err(|e| e.to_string())
+            }
+            _ => {
+                let pk = self.peer_pk.as_ref().ok_or("contact hasn't joined yet")?;
+                seal(&self.me(), pk, plaintext).map_err(|e| e.to_string())
+            }
+        }
+    }
+
+    /// Opens either version; v1 is refused once a v2 session exists, so a
+    /// bucket writer can't downgrade an established chat.
+    fn unseal(&mut self, raw: &[u8]) -> Result<(PublicKey, Vec<u8>), String> {
+        match (crate::version(raw), &mut self.ratchet) {
+            (2, Some(r)) => {
+                self.dirty = true;
+                r.open(raw).map_err(|e| e.to_string())
+            }
+            (1, r) if !r.as_ref().is_some_and(Ratchet::ready) => {
+                open(&self.me(), raw).map_err(|e| e.to_string())
+            }
+            (v, _) => Err(format!("unexpected envelope v{v}")),
+        }
+    }
+
+    fn deposit(&mut self, body: &serde_json::Value) -> Result<String, String> {
+        let sealed = self.seal(body.to_string().as_bytes())?;
         let key = format!("m/{}", ulid::Ulid::new());
         self.mbox_out.put(&key, &sealed).map_err(|e| e.to_string())?;
         Ok(key)
     }
 
-    pub fn send(&self, wire_id: &str, text: &str) -> Result<String, String> {
+    pub fn send(&mut self, wire_id: &str, text: &str) -> Result<String, String> {
         self.deposit(&serde_json::json!({ "t": "m", "id": wire_id, "x": text }))
     }
 
-    pub fn react(&self, ref_id: &str, emoji: &str) -> Result<(), String> {
+    pub fn react(&mut self, ref_id: &str, emoji: &str) -> Result<(), String> {
         self.deposit(&serde_json::json!({ "t": "r", "ref": ref_id, "e": emoji }))?;
         Ok(())
     }
 
-    pub fn set_timer(&self, secs: u64) -> Result<(), String> {
+    pub fn set_timer(&mut self, secs: u64) -> Result<(), String> {
         self.deposit(&serde_json::json!({ "t": "tmr", "s": secs }))?;
         Ok(())
     }
 
-    pub fn send_file(&self, wire_id: &str, path: &str) -> Result<(String, String), String> {
+    pub fn send_file(&mut self, wire_id: &str, path: &str) -> Result<(String, String), String> {
         let bytes = std::fs::read(path).map_err(|e| format!("read {path}: {e}"))?;
         if bytes.len() > 25 * 1024 * 1024 {
             return Err("file larger than 25 MB".into());
@@ -189,8 +260,7 @@ impl ContactSession {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "file".into());
-        let pk = self.peer_pk.as_ref().ok_or("contact hasn't joined yet")?;
-        let sealed = seal(&self.me(), pk, &bytes).map_err(|e| e.to_string())?;
+        let sealed = self.seal(&bytes)?;
         let att_key = format!("att/{}", ulid::Ulid::new());
         self.mbox_out.put(&att_key, &sealed).map_err(|e| e.to_string())?;
         let msg_key =
@@ -198,9 +268,9 @@ impl ContactSession {
         Ok((msg_key, name))
     }
 
-    pub fn fetch_attachment(&self, att_key: &str, name: &str) -> Result<String, String> {
+    pub fn fetch_attachment(&mut self, att_key: &str, name: &str) -> Result<String, String> {
         let raw = self.mbox_in.get(att_key).map_err(|e| e.to_string())?;
-        let (_, bytes) = open(&self.me(), &raw).map_err(|e| e.to_string())?;
+        let (_, bytes) = self.unseal(&raw)?;
         let dir = std::env::var("HOME")
             .map(|h| format!("{h}/.sanctum/files"))
             .map_err(|_| "no HOME".to_string())?;
@@ -221,18 +291,18 @@ impl ContactSession {
     }
 
     /// Drain the inbox. The hello control message needs no established peer
-    /// key to open (sender pk rides in the envelope).
-    pub fn poll(&self) -> Vec<ChatItem> {
+    /// key to open (sender pk rides in the envelope, authenticated by it).
+    pub fn poll(&mut self) -> Vec<ChatItem> {
         let mut out = Vec::new();
         let Ok(keys) = self.mbox_in.list("m/") else { return out };
         for key in keys {
             let Ok(raw) = self.mbox_in.get(&key) else { continue };
-            let Ok((_, pt)) = open(&self.me(), &raw) else { continue };
+            let Ok((from, pt)) = self.unseal(&raw) else { continue };
             let txt = String::from_utf8_lossy(&pt);
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
                 let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string();
                 let item = match v.get("t").and_then(|t| t.as_str()) {
-                    Some("hello") => Some(ChatItem::Hello { pk: s("pk") }),
+                    Some("hello") => Some(ChatItem::Hello { pk: B64.encode(from.as_bytes()) }),
                     Some("m") => Some(ChatItem::Message { id: s("id"), text: s("x") }),
                     Some("a") => {
                         Some(ChatItem::Attachment { id: s("id"), name: s("n"), att_key: s("k") })
@@ -331,8 +401,12 @@ pub fn spawn_worker(
         for c in store.contacts().unwrap_or_default() {
             let msgs = store.messages(c.id).unwrap_or_default();
             snapshot.push((c.clone(), msgs));
-            if let Ok(session) = ContactSession::new(&c, &me) {
-                live.push(Live { contact: c, session, pending: Vec::new() });
+            let ratchet = store.ratchet(&c.bucket_in).map(|b| Ratchet::load(&me, &b)).transpose();
+            match ratchet.map_err(|e| e.to_string()).and_then(|r| ContactSession::new(&c, &me, r)) {
+                Ok(session) => live.push(Live { contact: c, session, pending: Vec::new() }),
+                Err(e) => {
+                    let _ = events.send(err(format!("{}: {e}", c.name)));
+                }
             }
         }
         for g in store.groups().unwrap_or_default() {
@@ -348,11 +422,13 @@ pub fn spawn_worker(
             while let Ok(cmd) = outbound.try_recv() {
                 handle_cmd(cmd, &store, &me, &mut live, &mut groups, &events);
             }
+            live.iter_mut().for_each(|l| persist_ratchet(&store, l));
 
             for l in &mut live {
                 for item in l.session.poll() {
                     handle_item(item, l, &store, &events);
                 }
+                persist_ratchet(&store, l);
                 let cid = l.contact.id;
                 l.pending.retain_mut(|(wire_id, key, seen)| match l.session.is_delivered(key) {
                     Ok(false) => {
@@ -414,6 +490,16 @@ pub fn spawn_worker(
             std::thread::sleep(std::time::Duration::from_millis(1500));
         }
     });
+}
+
+fn persist_ratchet(store: &Store, l: &mut Live) {
+    if let Some(blob) = l.session.ratchet_update() {
+        if let Err(e) = store.set_ratchet(&l.contact.bucket_in, &blob) {
+            // Retry on the next pass rather than lose ratchet state.
+            l.session.dirty = true;
+            eprintln!("persist ratchet: {e}");
+        }
+    }
 }
 
 /// Strip the collision-safety prefix (uuid or ulid + '-') from a stored
@@ -493,12 +579,10 @@ fn handle_cmd(
                 );
             };
             match create_invite(&p, me, &name) {
-                Ok((mut contact, _link)) => match store.add_contact(&contact) {
+                Ok((mut contact, _link, session)) => match store.add_contact(&contact) {
                     Ok(id) => {
                         contact.id = id;
-                        if let Ok(session) = ContactSession::new(&contact, me) {
-                            live.push(Live { contact: contact.clone(), session, pending: Vec::new() });
-                        }
+                        live.push(Live { contact: contact.clone(), session, pending: Vec::new() });
                         let _ = events.send(Event::ContactAdded(contact));
                     }
                     Err(e) => send_err(e.to_string()),
@@ -566,12 +650,10 @@ fn handle_cmd(
             send_err("You've already joined with this invite".into())
         }
         Cmd::AcceptInvite { link, name } => match accept_invite(&link, me, &name) {
-            Ok(mut contact) => match store.add_contact(&contact) {
+            Ok((mut contact, session)) => match store.add_contact(&contact) {
                 Ok(id) => {
                     contact.id = id;
-                    if let Ok(session) = ContactSession::new(&contact, me) {
-                        live.push(Live { contact: contact.clone(), session, pending: Vec::new() });
-                    }
+                    live.push(Live { contact: contact.clone(), session, pending: Vec::new() });
                     let _ = events.send(Event::ContactAdded(contact));
                 }
                 Err(e) => send_err(e.to_string()),
@@ -626,7 +708,7 @@ fn handle_cmd(
             }
         }
         Cmd::React { contact_id, ref_id, emoji } => {
-            let Some(l) = live.iter().find(|l| l.contact.id == contact_id) else { return };
+            let Some(l) = live.iter_mut().find(|l| l.contact.id == contact_id) else { return };
             match l.session.react(&ref_id, &emoji) {
                 Ok(()) => {
                     let _ = store.set_reaction(contact_id, &ref_id, &emoji);
@@ -635,7 +717,7 @@ fn handle_cmd(
             }
         }
         Cmd::SetTimer { contact_id, secs } => {
-            let Some(l) = live.iter().find(|l| l.contact.id == contact_id) else { return };
+            let Some(l) = live.iter_mut().find(|l| l.contact.id == contact_id) else { return };
             if let Err(e) = l.session.set_timer(secs) {
                 send_err(e);
             }
