@@ -10,6 +10,7 @@
 		03DFBA15C5D6A5B6904576EF /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 20D882FECEBA461D22FFAB95 /* Assets.xcassets */; };
 		214035AEA77DC22285C4EAEB /* SanctumApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5EBEB4EED7822BA38A7789B /* SanctumApp.swift */; };
 		2E338BDA63BD758AD913AA64 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 616F6AC98B07E5EA3DE3E8C4 /* ContentView.swift */; };
+		9468DD6A53E0FEC657A84C34 /* SanctumCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5BE3D609CE2C5DC0353355F4 /* SanctumCore.xcframework */; };
 		FA245B8BD222E22036729809 /* sanctum_core.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A278737BDD502296443A3DF /* sanctum_core.swift */; };
 /* End PBXBuildFile section */
 
@@ -19,11 +20,23 @@
 		363CF622B496E6BFE9C51596 /* sanctum_coreFFI.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = sanctum_coreFFI.h; sourceTree = "<group>"; };
 		45DC6F29EDF26C607C64FD32 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		5A278737BDD502296443A3DF /* sanctum_core.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = sanctum_core.swift; sourceTree = "<group>"; };
+		5BE3D609CE2C5DC0353355F4 /* SanctumCore.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = SanctumCore.xcframework; sourceTree = "<group>"; };
 		616F6AC98B07E5EA3DE3E8C4 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		872042FFF619C23367F3E8D5 /* Bridging.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Bridging.h; sourceTree = "<group>"; };
 		CD05641E48D8E5E6F7FEDEF4 /* Sanctum.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Sanctum.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F5EBEB4EED7822BA38A7789B /* SanctumApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SanctumApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		C061C9F1B3E816206BDE4F15 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9468DD6A53E0FEC657A84C34 /* SanctumCore.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		95550B3E2AF67FD8F35060B8 /* Products */ = {
@@ -39,8 +52,17 @@
 			children = (
 				DBF76132D5D5B64E64BDD65C /* Generated */,
 				DA5525737AB45E226D9190F8 /* Sanctum */,
+				CD41CA9C397199B8AB8B0837 /* Frameworks */,
 				95550B3E2AF67FD8F35060B8 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		CD41CA9C397199B8AB8B0837 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				5BE3D609CE2C5DC0353355F4 /* SanctumCore.xcframework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 		DA5525737AB45E226D9190F8 /* Sanctum */ = {
@@ -74,6 +96,7 @@
 			buildPhases = (
 				4C16C53C619B36E652173FFF /* Sources */,
 				45CAD7D7F1BF7195E2D4088A /* Resources */,
+				C061C9F1B3E816206BDE4F15 /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -95,6 +118,10 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					DD6DF0F55971B2AC22E71272 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
 				};
 			};
 			buildConfigurationList = E068CE197AE5CFA613620BC6 /* Build configuration list for PBXProject "Sanctum" */;
@@ -146,6 +173,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Sanctum/Info.plist;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -153,8 +187,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/../../target/aarch64-apple-ios-sim/release";
-				OTHER_LDFLAGS = "-lsanctum_core";
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.sanctum.app;
 				SDKROOT = iphoneos;
 				SWIFT_OBJC_BRIDGING_HEADER = Sanctum/Bridging.h;
@@ -224,6 +257,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Sanctum/Info.plist;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -231,8 +271,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/../../target/aarch64-apple-ios-sim/release";
-				OTHER_LDFLAGS = "-lsanctum_core";
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.sanctum.app;
 				SDKROOT = iphoneos;
 				SWIFT_OBJC_BRIDGING_HEADER = Sanctum/Bridging.h;

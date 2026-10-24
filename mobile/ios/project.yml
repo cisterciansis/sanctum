@@ -10,19 +10,27 @@ targets:
     sources:
       - Sanctum
       - Generated
+    dependencies:
+      # Built by build-core.sh (device + simulator slices).
+      - framework: SanctumCore.xcframework
+        embed: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.sanctum.app
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
         SWIFT_OBJC_BRIDGING_HEADER: Sanctum/Bridging.h
-        LIBRARY_SEARCH_PATHS: "$(SRCROOT)/../../target/aarch64-apple-ios-sim/release"
-        OTHER_LDFLAGS: "-lsanctum_core"
         SWIFT_VERSION: "5.9"
+        CODE_SIGN_STYLE: Automatic
+        # Set to your Apple Developer Team ID for device/TestFlight builds.
+        DEVELOPMENT_TEAM: ""
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         GENERATE_INFOPLIST_FILE: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: Sanctum/Info.plist
       properties:
+        CFBundleDisplayName: Sanctum
         UILaunchScreen: {}
         CFBundleURLTypes:
           - CFBundleURLName: chat.sanctum

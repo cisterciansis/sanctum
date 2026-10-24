@@ -2,3 +2,4 @@ experiment/hippius.env
 experiment/.state
 target/
 private/
+mobile/ios/SanctumCore.xcframework/
