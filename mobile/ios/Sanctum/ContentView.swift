@@ -199,6 +199,7 @@ struct JoinSheet: View {
     @Environment(\.dismiss) var dismiss
     @State private var link = ""
     @State private var waiting = false
+    @State private var error: String?
 
     var body: some View {
         NavigationStack {
@@ -217,6 +218,7 @@ struct JoinSheet: View {
                         }
                     } else {
                         Button("Join") {
+                            error = nil
                             waiting = true
                             model.join(link)
                         }
@@ -226,7 +228,11 @@ struct JoinSheet: View {
                         }())
                     }
                 } footer: {
-                    Text("An invite carries everything you need — no account, no signup.")
+                    if let error {
+                        Text(error).foregroundStyle(.red)
+                    } else {
+                        Text("An invite carries everything you need — no account, no signup.")
+                    }
                 }
             }
             .navigationTitle("Join a chat")
@@ -235,7 +241,10 @@ struct JoinSheet: View {
                 if waiting { dismiss() }
             }
             .onChange(of: model.status) {
-                if waiting && model.status.hasPrefix("error") { waiting = false }
+                if waiting && model.status.hasPrefix("error") {
+                    waiting = false
+                    error = model.status
+                }
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

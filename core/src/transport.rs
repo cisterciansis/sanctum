@@ -24,11 +24,7 @@ fn agent_from_env() -> Result<ureq::Agent, Error> {
     let mut b = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(60))
         .user_agent(concat!("sanctum/", env!("CARGO_PKG_VERSION")));
-    let proxy_url = std::env::var("SANCTUM_PROXY").ok().or_else(|| {
-        let s = crate::demo::Settings::load();
-        s.proxy_enabled.then_some(s.proxy_url)
-    });
-    if let Some(proxy) = proxy_url {
+    if let Some(proxy) = proxy_url() {
         let proxy = ureq::Proxy::new(&proxy)
             .map_err(|e| Error::Transport(format!("bad proxy setting: {e}")))?;
         b = b.proxy(proxy);
@@ -36,17 +32,31 @@ fn agent_from_env() -> Result<ureq::Agent, Error> {
     Ok(b.build())
 }
 
+fn proxy_url() -> Option<String> {
+    std::env::var("SANCTUM_PROXY").ok().or_else(|| {
+        let s = crate::demo::Settings::load();
+        s.proxy_enabled.then_some(s.proxy_url)
+    })
+}
+
 
 /// Strip query strings (presigned signatures) from error text before logging,
 /// keeping whatever follows the query (ureq appends ": <kind>" after the URL).
 fn redact(e: impl std::fmt::Display) -> String {
     let s = e.to_string();
-    match s.split_once('?') {
+    let s = match s.split_once('?') {
         Some((head, rest)) => {
             let tail = rest.split_once(": ").map(|(_, t)| format!(": {t}")).unwrap_or_default();
             format!("{head}?<redacted>{tail}")
         }
         None => s,
+    };
+    // A dead proxy looks like a dead network; say which one it is.
+    match proxy_url() {
+        Some(p) if s.contains("Connection Failed") => {
+            format!("{s} (via proxy {p}: is it running? Turn the proxy off in Settings)")
+        }
+        _ => s,
     }
 }
 
