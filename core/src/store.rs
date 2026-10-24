@@ -368,12 +368,24 @@ impl Store {
         }
     }
 
-    /// Delete messages older than `secs` (disappearing messages).
-    pub fn purge_older_than(&self, secs: u64) -> Result<usize, Error> {
+    /// Delete messages older than `secs` (disappearing messages). Returns
+    /// what went, (chat, wire id, saved file), so views and files follow.
+    pub fn purge_older_than(&self, secs: u64) -> Result<Vec<(i64, String, Option<String>)>, Error> {
         let cutoff = chrono_now_ms() - (secs as i64) * 1000;
-        self.conn
-            .execute("DELETE FROM messages WHERE ts_ms < ?1", rusqlite::params![cutoff])
-            .map_err(|e| Error::Crypto(e.to_string()))
+        let mut stmt = self
+            .conn
+            .prepare("SELECT contact_id, wire_id, file_path FROM messages WHERE ts_ms < ?1")
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+        let gone = stmt
+            .query_map([cutoff], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+        if !gone.is_empty() {
+            self.conn
+                .execute("DELETE FROM messages WHERE ts_ms < ?1", rusqlite::params![cutoff])
+                .map_err(|e| Error::Crypto(e.to_string()))?;
+        }
+        Ok(gone)
     }
 
     pub fn messages(&self, contact_id: i64) -> Result<Vec<StoredMsg>, Error> {

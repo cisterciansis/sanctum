@@ -11,7 +11,11 @@ path = "src/main.rs"
 [dependencies]
 base64 = "0.22"
 sanctum-core = { path = "../core" }
-ratatui = "0.29"
+ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
+# Inline image previews: kitty / iTerm2 / sixel where the terminal supports
+# them, coloured half-blocks everywhere else.
+ratatui-image = { version = "8", default-features = false, features = ["crossterm", "image-defaults"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 crossterm = "0.28"
 chrono = "0.4"
 ulid = "1"

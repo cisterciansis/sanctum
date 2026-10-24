@@ -551,11 +551,27 @@ pub fn spawn_worker(
 
             let settings = crate::demo::Settings::load();
             if settings.disappear_secs > 0 && crate::demo::disappear_ok(settings.disappear_secs) {
-                let _ = store.purge_older_than(settings.disappear_secs);
+                // Tell the views too: rows vanishing silently stayed on screen.
+                for (contact_id, wire_id, file) in
+                    store.purge_older_than(settings.disappear_secs).unwrap_or_default()
+                {
+                    remove_saved_file(file);
+                    let _ = events.send(Event::Unsent { contact_id, wire_id });
+                }
             }
             std::thread::sleep(std::time::Duration::from_millis(1500));
         }
     });
+}
+
+/// Delete a received attachment's saved copy. Only files under our own
+/// files dir: a sent message's path is the user's original, never ours to remove.
+fn remove_saved_file(path: Option<String>) {
+    if let (Some(path), Some(dir)) = (path, crate::data_dir()) {
+        if std::path::Path::new(&path).starts_with(format!("{dir}/files")) {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
 }
 
 /// Most message ids one read receipt names (also the cap on what we accept).
@@ -1057,11 +1073,7 @@ fn handle_item(item: ChatItem, l: &mut Live, store: &Store, events: &std::sync::
         // chat, plus the attachment copy we saved for it.
         ChatItem::Delete { ref_id } => {
             let Some((false, file)) = store.msg_meta(cid, &ref_id) else { return };
-            if let (Some(path), Some(dir)) = (file, crate::data_dir()) {
-                if std::path::Path::new(&path).starts_with(format!("{dir}/files")) {
-                    let _ = std::fs::remove_file(&path);
-                }
-            }
+            remove_saved_file(file);
             let _ = store.delete_msg(cid, &ref_id);
             let _ = events.send(Event::Unsent { contact_id: cid, wire_id: ref_id });
         }

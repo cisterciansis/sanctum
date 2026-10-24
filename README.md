@@ -6,8 +6,23 @@ An invite link carries everything the other person needs — no account, no
 signup, no phone number. Nothing to run, nothing to trust, nothing to shut
 down.
 
-Chats use the Signal protocol ([libsignal](https://github.com/signalapp/libsignal)
-PQXDH + double ratchet): forward secrecy and a post-quantum handshake.
+- **Signal protocol.** Official [libsignal](https://github.com/signalapp/libsignal):
+  PQXDH handshake (X25519 + Kyber1024, post-quantum) and the double ratchet.
+  Forward secrecy and post-compromise security, per message.
+- **No man in the middle.** The invite carries the inviter's identity key;
+  a key bundle not signed by it is rejected.
+- **No accounts.** No phone number, email or username. You are a keypair.
+- **Invites are capabilities.** Each chat gets two fresh mailboxes; the link
+  holds a token scoped to just those two.
+- **Unstoppable.** Messages live on [Hippius](https://hippius.com),
+  decentralized storage on Bittensor (subnet 75). No Sanctum servers exist.
+- **Nearly free.** An invite costs the inviter cents of storage; joining is free.
+- **Encrypted at rest.** History in SQLCipher, key in the OS keychain.
+- **Tor built in** on iOS (any SOCKS proxy on desktop). Off by default.
+- **You decide what stays.** Disappearing messages (1 min to 1 year),
+  delete for everyone, opt-in reciprocal read receipts.
+- **Open and checked.** AGPL-3.0; protocol laws machine-checked in Bend.
+- **Next:** wallet-keypair credentials for storage, no API token at all.
 
 ## Install
 
