@@ -227,6 +227,9 @@ pub struct Settings {
     /// they appear (0 = off). Synced to the peer as a control message.
     #[serde(default)]
     pub disappear_secs: u64,
+    /// Send read receipts, and show the peer's. Reciprocal; off by default.
+    #[serde(default)]
+    pub read_receipts: bool,
     /// Optional Hippius management-API token (console → Settings). Purely
     /// opt-in: without it the app works as-is; with it the client can mint
     /// per-contact buckets/sub-tokens and rotate queues.
@@ -265,6 +268,7 @@ impl Default for Settings {
             proxy_url: default_proxy_url(),
             typing_indicators: false,
             disappear_secs: 0,
+            read_receipts: false,
             hippius_api_token: None,
             dev_keyfile: false,
             theme: default_theme(),

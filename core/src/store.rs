@@ -75,6 +75,9 @@ pub struct StoredMsg {
     pub reaction: Option<String>,
     /// Group messages: which seat sent it (None for direct chats / own).
     pub sender_seat: Option<i64>,
+    /// When it was read: by the peer for own messages (read receipts), by
+    /// us for received ones. None = unread.
+    pub read_ms: Option<i64>,
 }
 
 pub struct Store {
@@ -145,6 +148,7 @@ impl Store {
             .map_err(|e| Error::Crypto(e.to_string()))?;
         // Additive migration for pre-group databases; harmless when present.
         let _ = conn.execute("ALTER TABLE messages ADD COLUMN sender_seat INTEGER", []);
+        let _ = conn.execute("ALTER TABLE messages ADD COLUMN read_ms INTEGER", []);
         Ok(Self { conn })
     }
 
@@ -288,6 +292,54 @@ impl Store {
         Ok(())
     }
 
+    /// Mark every unread received message in a chat as read; returns their
+    /// wire ids (oldest first) so a receipt can name them.
+    pub fn mark_incoming_read(&self, contact_id: i64) -> Result<Vec<String>, Error> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT wire_id FROM messages
+                 WHERE contact_id = ?1 AND mine = 0 AND read_ms IS NULL ORDER BY ts_ms, id",
+            )
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+        let ids = stmt
+            .query_map([contact_id], |r| r.get(0))
+            .and_then(|rows| rows.collect::<Result<Vec<String>, _>>())
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+        self.conn
+            .execute(
+                "UPDATE messages SET read_ms = ?2
+                 WHERE contact_id = ?1 AND mine = 0 AND read_ms IS NULL",
+                rusqlite::params![contact_id, chrono_now_ms()],
+            )
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+        Ok(ids)
+    }
+
+    /// Record the peer's read receipt for one of *our* messages (never theirs).
+    /// Returns whether it newly applied.
+    pub fn set_read(&self, contact_id: i64, wire_id: &str, ts_ms: i64) -> Result<bool, Error> {
+        self.conn
+            .execute(
+                "UPDATE messages SET read_ms = ?3, delivered = 1
+                 WHERE contact_id = ?1 AND wire_id = ?2 AND mine = 1 AND read_ms IS NULL",
+                rusqlite::params![contact_id, wire_id, ts_ms],
+            )
+            .map(|n| n > 0)
+            .map_err(|e| Error::Crypto(e.to_string()))
+    }
+
+    /// (mine, file_path) of one message, if it exists.
+    pub fn msg_meta(&self, contact_id: i64, wire_id: &str) -> Option<(bool, Option<String>)> {
+        self.conn
+            .query_row(
+                "SELECT mine, file_path FROM messages WHERE contact_id = ?1 AND wire_id = ?2",
+                rusqlite::params![contact_id, wire_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .ok()
+    }
+
     pub fn delete_msg(&self, contact_id: i64, wire_id: &str) -> Result<(), Error> {
         self.conn
             .execute(
@@ -328,7 +380,7 @@ impl Store {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT wire_id, mine, text, file_path, ts_ms, delivered, reaction, sender_seat
+                "SELECT wire_id, mine, text, file_path, ts_ms, delivered, reaction, sender_seat, read_ms
                  FROM messages WHERE contact_id = ?1 ORDER BY ts_ms, id",
             )
             .map_err(|e| Error::Crypto(e.to_string()))?;
@@ -343,6 +395,7 @@ impl Store {
                     delivered: r.get(5)?,
                     reaction: r.get(6)?,
                     sender_seat: r.get(7)?,
+                    read_ms: r.get(8)?,
                 })
             })
             .map_err(|e| Error::Crypto(e.to_string()))?;

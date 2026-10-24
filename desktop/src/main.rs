@@ -75,6 +75,12 @@ struct Msg {
     wire_id: String,
     mine: bool,
     delivered: bool,
+    /// Never left this device (only known for this session's sends).
+    failed: bool,
+    /// Upload finished (history is always sent; new sends start false).
+    sent: bool,
+    /// Own message the peer has read (read receipts on).
+    read: bool,
     reaction: Option<SharedString>,
     text: SharedString,
     file: Option<(SharedString, String)>,
@@ -91,6 +97,9 @@ impl Msg {
             wire_id: m.wire_id,
             mine: m.mine,
             delivered: m.delivered,
+            failed: false,
+            sent: true,
+            read: m.mine && m.read_ms.is_some(),
             reaction: m.reaction.map(Into::into),
             text: m.text.clone().into(),
             file: m.file_path.map(|p| (m.text.into(), p)),
@@ -107,6 +116,9 @@ impl Msg {
             wire_id,
             mine,
             delivered: false,
+            failed: false,
+            sent: !mine,
+            read: false,
             reaction: None,
             text: text.into(),
             file: file.map(|(n, p)| (n.into(), p)),
@@ -147,6 +159,8 @@ struct ChatApp {
     inviting: bool,
     joining: bool,
     picker_for: Option<usize>,
+    /// Message whose delete actions are open (right-click a bubble).
+    actions_for: Option<usize>,
     chat_menu_for: Option<usize>,
     copied_at: Option<std::time::Instant>,
     hovered_msg: Option<usize>,
@@ -155,6 +169,9 @@ struct ChatApp {
     join_state: Entity<InputState>,
     group_state: Entity<InputState>,
     timer_state: Entity<InputState>,
+    /// Message list scroll, so new messages follow only a reader at the bottom.
+    scroll: ScrollHandle,
+    window_active: bool,
     outbound: std::sync::mpsc::Sender<Cmd>,
     events: std::sync::mpsc::Receiver<Event>,
     _subscriptions: Vec<Subscription>,
@@ -175,13 +192,19 @@ impl ChatApp {
         let join_state = cx.new(|cx| InputState::new(window, cx).placeholder("sanctum://…"));
         let group_state = cx.new(|cx| InputState::new(window, cx).placeholder("Group name"));
         let timer_state = cx.new(|cx| InputState::new(window, cx).placeholder("90m, 2w, 6mo"));
-        let _subscriptions = vec![cx.subscribe_in(&input_state, window, {
+        let mut _subscriptions = vec![cx.subscribe_in(&input_state, window, {
             move |this: &mut Self, _, ev: &InputEvent, window, cx| {
                 if let InputEvent::PressEnter { .. } = ev {
                     this.send_current(window, cx);
                 }
             }
         })];
+
+        // Read receipts only count what's on screen: track window focus.
+        _subscriptions.push(cx.observe_window_activation(window, |this, window, _| {
+            this.window_active = window.is_window_active();
+            this.mark_read();
+        }));
 
         cx.spawn(async move |this, cx| {
             loop {
@@ -208,6 +231,7 @@ impl ChatApp {
             inviting: false,
             joining: false,
             picker_for: None,
+            actions_for: None,
             chat_menu_for: None,
             copied_at: None,
             hovered_msg: None,
@@ -216,6 +240,8 @@ impl ChatApp {
             join_state,
             group_state,
             timer_state,
+            scroll: ScrollHandle::new(),
+            window_active: true,
             outbound: out_tx,
             events: ev_rx,
             _subscriptions,
@@ -244,6 +270,7 @@ impl ChatApp {
                         })
                         .collect();
                     self.status = "ready".into();
+                    self.mark_read();
                 }
                 Event::ContactAdded(c) => {
                     self.inviting = false;
@@ -288,10 +315,26 @@ impl ChatApp {
                 }
                 Event::Received { contact_id, msg } => {
                     let focused = self.chats.get(self.selected).map(|c| c.id) == Some(contact_id);
+                    // Within a few px of the end counts as "at the bottom".
+                    let at_bottom = -self.scroll.offset().y >= self.scroll.max_offset().y - px(24.);
                     if let Some(c) = self.chat_by_id(contact_id) {
                         c.msgs.push(Msg::from_stored(msg));
                         if !focused {
                             c.unread += 1;
+                        }
+                    }
+                    if focused && at_bottom {
+                        self.scroll.scroll_to_bottom();
+                    }
+                    if focused {
+                        self.mark_read();
+                    }
+                }
+                Event::Read { contact_id, wire_ids, .. } => {
+                    if let Some(c) = self.chat_by_id(contact_id) {
+                        for m in c.msgs.iter_mut().filter(|m| wire_ids.contains(&m.wire_id)) {
+                            m.read = true;
+                            m.delivered = true;
                         }
                     }
                 }
@@ -301,6 +344,21 @@ impl ChatApp {
                             m.delivered = true;
                         }
                     }
+                }
+                Event::Sent { contact_id, wire_id } => {
+                    if let Some(c) = self.chat_by_id(contact_id) {
+                        if let Some(m) = c.msgs.iter_mut().find(|m| m.wire_id == wire_id) {
+                            m.sent = true;
+                        }
+                    }
+                }
+                Event::SendFailed { contact_id, wire_id, error } => {
+                    if let Some(c) = self.chat_by_id(contact_id) {
+                        if let Some(m) = c.msgs.iter_mut().find(|m| m.wire_id == wire_id) {
+                            m.failed = true;
+                        }
+                    }
+                    self.status = format!("error: not sent: {error}").into();
                 }
                 Event::Reaction { contact_id, ref_id, emoji } => {
                     if let Some(c) = self.chat_by_id(contact_id) {
@@ -317,6 +375,7 @@ impl ChatApp {
                     if let Some(c) = self.chat_by_id(contact_id) {
                         c.msgs.retain(|m| m.wire_id != wire_id);
                     }
+                    self.actions_for = None; // indices shifted
                 }
                 Event::Error(e) => {
                     self.inviting = false;
@@ -337,6 +396,13 @@ impl ChatApp {
 
     fn selected_id(&self) -> Option<i64> {
         self.chats.get(self.selected).map(|c| c.id)
+    }
+
+    /// The selected chat is on screen (if the window is focused).
+    fn mark_read(&self) {
+        if let (true, Some(id)) = (self.window_active, self.selected_id()) {
+            let _ = self.outbound.send(Cmd::MarkRead { contact_id: id });
+        }
     }
 
     /// Apply a validated timer locally and sync it to the selected chat.
@@ -366,6 +432,7 @@ impl ChatApp {
         let wire_id = ulid::Ulid::new().to_string();
         if let Some(c) = self.chats.get_mut(self.selected) {
             c.msgs.push(Msg::now(wire_id.clone(), true, text.clone(), None));
+            self.scroll.scroll_to_bottom();
         }
         let _ = self.outbound.send(Cmd::Send { contact_id: sel, wire_id, text });
         cx.notify();
@@ -406,6 +473,7 @@ impl ChatApp {
                                 name.clone(),
                                 Some((name, path.clone())),
                             ));
+                            this.scroll.scroll_to_bottom();
                         }
                         let _ =
                             this.outbound.send(Cmd::SendFile { contact_id: sel, wire_id, path });
@@ -579,6 +647,8 @@ impl ChatApp {
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.selected = i;
                     this.picker_for = None;
+                    this.actions_for = None;
+                    this.mark_read();
                     this.chat_menu_for = None;
                     if let Some(c) = this.chats.get_mut(i) {
                         c.unread = 0;
@@ -885,6 +955,17 @@ impl Render for ChatApp {
                         Switch::new("set-ts").checked(self.settings.timestamps).on_click(
                             cx.listener(|this, v: &bool, _, cx| {
                                 this.settings.timestamps = *v;
+                                this.settings.save();
+                                cx.notify();
+                            }),
+                        ),
+                    ),
+                )
+                .child(
+                    row("Read receipts", Some("send yours and see theirs · off hides both")).child(
+                        Switch::new("set-read").checked(self.settings.read_receipts).on_click(
+                            cx.listener(|this, v: &bool, _, cx| {
+                                this.settings.read_receipts = *v;
                                 this.settings.save();
                                 cx.notify();
                             }),
@@ -1282,7 +1363,8 @@ impl Render for ChatApp {
 
         let mut rows: Vec<AnyElement> = Vec::new();
         if let Some(chat) = self.chats.get(self.selected) {
-            let last_delivered = chat.msgs.iter().rposition(|m| m.mine && m.delivered);
+            // Only the newest finished send carries Sent / Delivered.
+            let last_sent = chat.msgs.iter().rposition(|m| m.mine && m.sent && !m.failed);
             for (i, m) in chat.msgs.iter().enumerate() {
                 let prev = i.checked_sub(1).and_then(|j| chat.msgs.get(j));
                 let new_day = prev.is_none_or(|pm| pm.day != m.day);
@@ -1331,9 +1413,15 @@ impl Render for ChatApp {
                 if self.hovered_msg == Some(i) {
                     caption.push(m.time.to_string());
                 }
-                let unsendable = m.mine && !m.delivered && chat.id >= 0;
-                if Some(i) == last_delivered {
-                    caption.push("Delivered".into());
+                let unsendable = m.mine && !m.delivered && !m.failed && chat.id >= 0;
+                if Some(i) == last_sent {
+                    caption.push(if m.read && self.settings.read_receipts {
+                        "Read".into()
+                    } else if m.delivered {
+                        "Delivered".into()
+                    } else {
+                        "Sent".into()
+                    });
                 } else if unsendable {
                     caption.push("click bubble to unsend".into());
                 }
@@ -1439,6 +1527,57 @@ impl Render for ChatApp {
                     col = col
                         .child(div().text_xs().text_color(rgb(p.sub)).child(caption.join(" · ")));
                 }
+                if self.actions_for == Some(i) {
+                    let link = |id: &'static str, label: &'static str, everyone: bool| {
+                        let w = m.wire_id.clone();
+                        div()
+                            .id((id, i))
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(rgb(0xFF453A))
+                            .hover(|d| d.underline())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let _ = this.outbound.send(Cmd::DeleteMsg {
+                                    contact_id,
+                                    wire_id: w.clone(),
+                                    everyone,
+                                });
+                                this.actions_for = None;
+                                cx.notify();
+                            }))
+                            .child(label)
+                    };
+                    // Undelivered own messages already have unsend.
+                    let for_all = m.mine && m.delivered && contact_id >= 0;
+                    col = col.child(
+                        h_flex()
+                            .gap_3()
+                            .child(link("del-me", "Delete for me", false))
+                            .when(for_all, |d| {
+                                d.child(link("del-all", "Delete for everyone", true))
+                            }),
+                    );
+                }
+                // Each send shows its own upload bar (easing toward 90%) until
+                // it lands; one that never left gets a red mark instead.
+                if m.failed {
+                    col = col.child(div().text_xs().text_color(rgb(0xFF453A)).child("! Not sent"));
+                } else if m.mine && !m.sent {
+                    col = col.child(div().w(px(64.)).h(px(2.)).child(
+                        div().h_full().bg(rgb(accent)).with_animation(
+                            ("send-bar", i),
+                            Animation::new(Duration::from_secs(8)),
+                            |d, t| d.w(relative(0.9 * (1.0 - (1.0 - t).powi(3)))),
+                        ),
+                    ));
+                }
+                let col = col.on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, _, _, cx| {
+                        this.actions_for = if this.actions_for == Some(i) { None } else { Some(i) };
+                        cx.notify();
+                    }),
+                );
                 rows.push(col.into_any_element());
             }
         }
@@ -1450,6 +1589,7 @@ impl Render for ChatApp {
             .gap_1()
             .p_3()
             .overflow_y_scroll()
+            .track_scroll(&self.scroll)
             .children(rows);
 
         let composer = h_flex()

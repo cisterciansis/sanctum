@@ -7,7 +7,6 @@
 //! device. Endpoints per api.hippius.com's published OpenAPI spec.
 
 use crate::Error;
-use std::time::Duration;
 
 const API: &str = "https://api.hippius.com/api";
 
@@ -20,13 +19,9 @@ impl Provisioner {
     /// None when no token is configured — callers fall back to static creds.
     pub fn from_settings() -> Option<Self> {
         let token = crate::demo::Settings::load().hippius_api_token?;
-        Some(Self {
-            token,
-            agent: ureq::AgentBuilder::new()
-                .timeout(Duration::from_secs(60))
-                .user_agent(concat!("sanctum/", env!("CARGO_PKG_VERSION")))
-                .build(),
-        })
+        // Same proxy as the gateway: provisioning from the bare IP would tie
+        // it to the buckets it creates.
+        Some(Self { token, agent: crate::transport::agent_from_env().ok()? })
     }
 
     fn post(&self, path: &str, body: serde_json::Value) -> Result<serde_json::Value, Error> {

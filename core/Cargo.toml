@@ -15,6 +15,9 @@ required-features = ["ffi-cli"]
 [features]
 ffi = ["dep:uniffi"]
 ffi-cli = ["ffi", "uniffi/cli"]
+# Embedded Tor (Arti) for platforms with no Tor daemon to point at (iOS).
+# Adds ~13 MB, so only the iOS build turns it on.
+tor = ["dep:arti-client", "dep:tokio", "dep:libc"]
 
 [dependencies]
 # Mobile bindings (Swift/Kotlin) over the same core.
@@ -39,5 +42,10 @@ thiserror = "2"
 percent-encoding = "2"
 # Encrypted local history: SQLCipher (same at-rest stack as Signal/SimpleX),
 # DB key held in the OS keychain, never on disk.
-rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }
+rusqlite = { version = "0.37", features = ["bundled-sqlcipher-vendored-openssl"] }
 keyring = { version = "3", features = ["apple-native"] }
+arti-client = { version = "0.47", optional = true, default-features = false, features = ["tokio", "native-tls", "compression"] }
+tokio = { version = "1", optional = true, features = ["rt-multi-thread", "net", "io-util", "time"] }
+# Pin only: sysinfo 0.38 (via arti's tor-memquota) fails to build for iOS
+# once libc makes proc_fdinfo macOS-only (0.2.191). Drop with a fixed sysinfo.
+libc = { version = "0.2, <0.2.190", optional = true }

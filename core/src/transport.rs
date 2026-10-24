@@ -16,20 +16,32 @@ pub struct Mailbox {
     agent: ureq::Agent,
 }
 
-/// Metadata-privacy toggle: route every gateway request through a SOCKS5/HTTP
-/// proxy, e.g. Tor (socks5://127.0.0.1:9050) or a UR network proxy endpoint.
-/// SANCTUM_PROXY env overrides; otherwise the persisted Settings toggle; else
-/// direct.
-fn agent_from_env() -> Result<ureq::Agent, Error> {
+/// Metadata-privacy toggle: route every Hippius request (gateway and
+/// management API) through a SOCKS5/HTTP proxy, e.g. Tor
+/// (socks5://127.0.0.1:9050), a UR network proxy endpoint, or "tor" for the
+/// embedded Arti in builds with the `tor` feature. SANCTUM_PROXY env
+/// overrides; otherwise the persisted Settings toggle; else direct.
+pub(crate) fn agent_from_env() -> Result<ureq::Agent, Error> {
     let mut b = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(60))
         .user_agent(concat!("sanctum/", env!("CARGO_PKG_VERSION")));
     if let Some(proxy) = proxy_url() {
+        let proxy = if proxy == "tor" { embedded_tor()? } else { proxy };
         let proxy = ureq::Proxy::new(&proxy)
             .map_err(|e| Error::Transport(format!("bad proxy setting: {e}")))?;
         b = b.proxy(proxy);
     }
     Ok(b.build())
+}
+
+#[cfg(feature = "tor")]
+fn embedded_tor() -> Result<String, Error> {
+    crate::tor::socks_url()
+}
+
+#[cfg(not(feature = "tor"))]
+fn embedded_tor() -> Result<String, Error> {
+    Err(Error::Transport("this build has no embedded Tor; set a SOCKS proxy URL".into()))
 }
 
 fn proxy_url() -> Option<String> {
@@ -53,6 +65,11 @@ fn redact(e: impl std::fmt::Display) -> String {
     };
     // A dead proxy looks like a dead network; say which one it is.
     match proxy_url() {
+        #[cfg(feature = "tor")]
+        Some(p) if p == "tor" => match crate::tor::status() {
+            Some((false, why)) => format!("{s} ({why})"),
+            _ => s,
+        },
         Some(p) if s.contains("Connection Failed") => {
             format!("{s} (via proxy {p}: is it running? Turn the proxy off in Settings)")
         }
@@ -76,12 +93,21 @@ impl Mailbox {
         })
     }
 
+    /// Retries dropped connections (resets, timeouts) twice; re-PUTting the
+    /// same sealed bytes to the same key is idempotent. HTTP errors are final.
     pub fn put(&self, key: &str, body: &[u8]) -> Result<(), Error> {
         let url = self.bucket.put_object(Some(&self.creds), key).sign(SIGN_TTL);
-        self.agent.put(url.as_str())
-            .send_bytes(body)
-            .map_err(|e| Error::Transport(format!("put {key}: {}", redact(e))))?;
-        Ok(())
+        let mut attempt = 0;
+        loop {
+            match self.agent.put(url.as_str()).send_bytes(body) {
+                Ok(_) => return Ok(()),
+                Err(ureq::Error::Transport(_)) if attempt < 2 => {
+                    attempt += 1;
+                    std::thread::sleep(Duration::from_secs(attempt));
+                }
+                Err(e) => return Err(Error::Transport(format!("put {key}: {}", redact(e)))),
+            }
+        }
     }
 
     pub fn get(&self, key: &str) -> Result<Vec<u8>, Error> {

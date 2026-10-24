@@ -26,6 +26,10 @@ struct Msg {
     wire_id: String,
     mine: bool,
     delivered: bool,
+    /// Never left this device (only known for this session's sends).
+    failed: bool,
+    /// Own message the peer has read (read receipts on).
+    read: bool,
     reaction: Option<String>,
     text: String,
     time: String,
@@ -39,10 +43,18 @@ impl Msg {
             wire_id: m.wire_id,
             mine: m.mine,
             delivered: m.delivered,
+            failed: false,
+            read: m.mine && m.read_ms.is_some(),
             reaction: m.reaction,
             text: {
                 let base = if let Some(p) = &m.file_path {
-                    format!("[file] {} -> {p}", m.text)
+                    // Local save path, shortened: ~ instead of /Users/<you>.
+                    let home = std::env::var("HOME").unwrap_or_default();
+                    let p = match p.strip_prefix(&home) {
+                        Some(rest) if !home.is_empty() => format!("~{rest}"),
+                        _ => p.clone(),
+                    };
+                    format!("[file] {} → {p}", m.text)
                 } else {
                     m.text
                 };
@@ -66,6 +78,9 @@ struct Chat {
     unread: u32,
 }
 
+/// The resting status line.
+const IDLE: &str = "end-to-end encrypted · hippius";
+
 /// Shown under Settings (Ctrl-S); keep in step with `submit` and `run`.
 const COMMANDS: &[(&str, &str)] = &[
     ("Ctrl-N", "new invite link (copied for you)"),
@@ -81,6 +96,8 @@ const COMMANDS: &[(&str, &str)] = &[
     ("/group <size> <name>", "new group (2-6 seats)"),
     ("/clear", "clear this chat's history"),
     ("/clearweek", "clear messages older than a week"),
+    ("/del", "delete your last message for everyone"),
+    ("/delme", "delete the last message from this device"),
     ("/delete", "delete this chat (asks to confirm)"),
     ("/timer <time>", "disappearing: off, 90m, 2w, 6mo... (1 min to 1 year)"),
 ];
@@ -117,10 +134,15 @@ struct App {
     chats: Vec<Chat>,
     selected: usize,
     status: String,
+    /// When `status` last changed; notes fade back to IDLE after a few seconds.
+    status_since: (String, std::time::Instant),
     settings: Settings,
     show_settings: bool,
     react_mode: bool,
     inviting: bool,
+    /// Terminal has focus, so the selected chat is actually being looked at
+    /// (for read receipts). Terminals without focus reporting stay true.
+    focused: bool,
     /// Chat armed by a first `/delete`; a second one confirms.
     pending_delete: Option<i64>,
     input: String,
@@ -143,11 +165,13 @@ impl App {
             chats: Vec::new(),
             selected: 0,
             status: "loading…".into(),
+            status_since: (String::new(), std::time::Instant::now()),
             settings: Settings::load(),
             show_settings: false,
             react_mode: false,
             inviting: false,
             pending_delete: None,
+            focused: true,
             input: String::new(),
             outbound: out_tx,
             events: ev_rx,
@@ -177,7 +201,8 @@ impl App {
                             unread: 0,
                         })
                         .collect();
-                    self.status = "end-to-end encrypted · hippius".into();
+                    self.status = IDLE.into();
+                    self.mark_read();
                 }
                 Event::ContactAdded(c) => {
                     let ours = std::mem::take(&mut self.inviting) && !c.invite_link.is_empty();
@@ -208,6 +233,17 @@ impl App {
                             c.unread += 1;
                         }
                     }
+                    if focused {
+                        self.mark_read();
+                    }
+                }
+                Event::Read { contact_id, wire_ids, .. } => {
+                    if let Some(c) = self.chat_by_id(contact_id) {
+                        for m in c.msgs.iter_mut().filter(|m| wire_ids.contains(&m.wire_id)) {
+                            m.read = true;
+                            m.delivered = true;
+                        }
+                    }
                 }
                 Event::Delivered { contact_id, wire_id } => {
                     if let Some(c) = self.chat_by_id(contact_id) {
@@ -215,6 +251,16 @@ impl App {
                             m.delivered = true;
                         }
                     }
+                }
+                // The TUI spins until delivered, so upload completion adds nothing.
+                Event::Sent { .. } => {}
+                Event::SendFailed { contact_id, wire_id, error } => {
+                    if let Some(c) = self.chat_by_id(contact_id) {
+                        if let Some(m) = c.msgs.iter_mut().find(|m| m.wire_id == wire_id) {
+                            m.failed = true;
+                        }
+                    }
+                    self.status = format!("error: not sent: {error}");
                 }
                 Event::Reaction { contact_id, ref_id, emoji } => {
                     if let Some(c) = self.chat_by_id(contact_id) {
@@ -291,7 +337,7 @@ impl App {
         if text == "/delete" {
             if armed == Some(sel) {
                 let _ = self.outbound.send(Cmd::DeleteContact { contact_id: sel });
-                self.status = "chat deleted".into();
+                self.status = format!("deleted '{}'", self.chats[self.selected].name);
             } else {
                 self.pending_delete = Some(sel);
                 let name = self.chats[self.selected].name.clone();
@@ -304,6 +350,25 @@ impl App {
             match demo::parse_disappear(t) {
                 Some(secs) => self.set_timer(secs),
                 None => self.status = "timer: off, or 1 minute to 1 year, e.g. 90m, 2w, 6mo".into(),
+            }
+            self.input.clear();
+            return;
+        }
+        if text == "/del" || text == "/delme" {
+            let everyone = text == "/del";
+            // No message cursor in the TUI: act on the newest eligible one.
+            let target = self.current().and_then(|c| {
+                c.msgs
+                    .iter()
+                    .rev()
+                    .find(|m| !m.wire_id.is_empty() && (!everyone || (m.mine && !m.failed)))
+                    .map(|m| m.wire_id.clone())
+            });
+            match target {
+                Some(wire_id) => {
+                    let _ = self.outbound.send(Cmd::DeleteMsg { contact_id: sel, wire_id, everyone });
+                }
+                None => self.status = "no message to delete".into(),
             }
             self.input.clear();
             return;
@@ -337,6 +402,13 @@ impl App {
         self.input.clear();
     }
 
+    /// Tell the worker the selected chat is on screen (no-op when unfocused).
+    fn mark_read(&self) {
+        if let (true, Some(c)) = (self.focused, self.chats.get(self.selected)) {
+            let _ = self.outbound.send(Cmd::MarkRead { contact_id: c.id });
+        }
+    }
+
     /// Copy the selected chat's (first open) invite link to the clipboard.
     fn copy_invite(&mut self) {
         let link = self.chats.get(self.selected).and_then(|c| {
@@ -366,6 +438,8 @@ impl App {
                 wire_id: wire_id.into(),
                 mine: true,
                 delivered: false,
+                failed: false,
+                read: false,
                 reaction: None,
                 text,
                 time: now.format("%-I:%M %p").to_string(),
@@ -515,6 +589,12 @@ impl App {
                 }
                 lines.push(Line::raw(""));
             }
+            // Advances on each redraw (~4/s): a micro "sending" spinner.
+            const SPIN: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis());
+            let spin = SPIN[(ms / 100 % SPIN.len() as u128) as usize];
             let mut prev_day: Option<&str> = None;
             for m in &c.msgs {
                 if prev_day != Some(m.day.as_str()) {
@@ -538,7 +618,18 @@ impl App {
                 };
                 let react = m.reaction.clone().map(|r| format!(" {r}")).unwrap_or_default();
                 let line = if m.mine {
-                    let receipt = if m.delivered { " ✓" } else { "" };
+                    // Groups have no receipts yet, so no spinner there.
+                    let (receipt, color) = if m.failed {
+                        (" ! not sent".to_string(), Color::Red)
+                    } else if m.read && self.settings.read_receipts {
+                        (" ✓✓ read".to_string(), Color::Cyan)
+                    } else if m.delivered {
+                        (" ✓".to_string(), Color::Green)
+                    } else if c.id >= 0 {
+                        (format!(" {spin}"), Color::DarkGray)
+                    } else {
+                        (String::new(), Color::DarkGray)
+                    };
                     let pad = width.saturating_sub(
                         text.chars().count()
                             + receipt.chars().count()
@@ -550,7 +641,7 @@ impl App {
                         Span::raw(react.clone()),
                         Span::styled(time, Style::default().fg(Color::DarkGray)),
                         Span::styled(text, style),
-                        Span::styled(receipt.to_string(), Style::default().fg(Color::Green)),
+                        Span::styled(receipt, Style::default().fg(color)),
                     ])
                 } else {
                     Line::from(vec![
@@ -597,13 +688,17 @@ impl App {
                 "  3 · Disappearing msgs     [{}]  · /timer <time> for custom",
                 demo::disappear_label(self.settings.disappear_secs)
             )),
+            Line::raw(format!(
+                "  4 · Read receipts         {}  send yours and see theirs",
+                on(self.settings.read_receipts)
+            )),
             Line::from(Span::styled(
-                "  4 · Typing indicators     coming soon",
+                "  5 · Typing indicators     coming soon",
                 Style::default().fg(Color::DarkGray),
             )),
             Line::raw(""),
             Line::from(Span::styled(
-                "  press 1/2/3 to toggle · esc to close",
+                "  press 1-4 to toggle · esc to close",
                 Style::default().fg(Color::DarkGray),
             )),
             Line::raw(""),
@@ -620,12 +715,38 @@ impl App {
         f.render_widget(Paragraph::new("").block(Block::default().borders(Borders::ALL)), composer);
     }
 
+    /// The status line is shared by every chat, so notes are transient: info
+    /// fades after 4 s, errors after 10 s. An expired delete prompt disarms.
+    fn expire_status(&mut self) {
+        let now = std::time::Instant::now();
+        if self.status != self.status_since.0 {
+            self.status_since = (self.status.clone(), now);
+            return;
+        }
+        let ttl = if self.status.starts_with("error") { 10 } else { 4 };
+        let sticky = self.status == IDLE || self.status == "loading…";
+        if !sticky && now.duration_since(self.status_since.1).as_secs() >= ttl {
+            self.status = IDLE.into();
+            self.pending_delete = None;
+        }
+    }
+
     fn run(mut self, mut terminal: DefaultTerminal) -> io::Result<()> {
         loop {
             self.drain_events();
+            self.expire_status();
             terminal.draw(|f| self.draw(f))?;
             if event::poll(Duration::from_millis(250))? {
-                if let TermEvent::Key(key) = event::read()? {
+                let ev = event::read()?;
+                match ev {
+                    TermEvent::FocusGained => {
+                        self.focused = true;
+                        self.mark_read();
+                    }
+                    TermEvent::FocusLost => self.focused = false,
+                    _ => {}
+                }
+                if let TermEvent::Key(key) = ev {
                     if self.react_mode {
                         match key.code {
                             KeyCode::Char(c @ '1'..='6') => {
@@ -650,6 +771,10 @@ impl App {
                             KeyCode::Char('3') => {
                                 self.set_timer(demo::next_disappear_preset(self.settings.disappear_secs))
                             }
+                            KeyCode::Char('4') => {
+                                self.settings.read_receipts = !self.settings.read_receipts;
+                                self.settings.save();
+                            }
                             _ => {}
                         }
                         continue;
@@ -660,6 +785,9 @@ impl App {
                         (KeyCode::Tab, _) => {
                             if !self.chats.is_empty() {
                                 self.selected = (self.selected + 1) % self.chats.len();
+                                self.status = IDLE.into(); // notes belong to the chat you left
+                                self.pending_delete = None;
+                                self.mark_read();
                                 if let Some(c) = self.current() {
                                     c.unread = 0;
                                 }
@@ -693,7 +821,10 @@ impl App {
 
 fn main() -> io::Result<()> {
     let terminal = ratatui::init();
+    // Focus reports tell us when the chat is really on screen (read receipts).
+    let _ = crossterm::execute!(io::stdout(), crossterm::event::EnableFocusChange);
     let result = App::new().run(terminal);
+    let _ = crossterm::execute!(io::stdout(), crossterm::event::DisableFocusChange);
     ratatui::restore();
     result
 }

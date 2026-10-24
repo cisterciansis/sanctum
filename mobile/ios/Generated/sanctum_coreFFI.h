@@ -282,6 +282,11 @@ void uniffi_sanctum_core_fn_method_client_clear_history(void*_Nonnull ptr, int64
 void uniffi_sanctum_core_fn_method_client_delete_contact(void*_Nonnull ptr, int64_t contact_id, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_DELETE_MSG
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_DELETE_MSG
+void uniffi_sanctum_core_fn_method_client_delete_msg(void*_Nonnull ptr, int64_t contact_id, RustBuffer wire_id, int8_t everyone, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_GET_SETTINGS
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_GET_SETTINGS
 RustBuffer uniffi_sanctum_core_fn_method_client_get_settings(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
@@ -290,6 +295,11 @@ RustBuffer uniffi_sanctum_core_fn_method_client_get_settings(void*_Nonnull ptr, 
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_HAS_API_TOKEN
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_HAS_API_TOKEN
 int8_t uniffi_sanctum_core_fn_method_client_has_api_token(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_MARK_READ
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_MARK_READ
+void uniffi_sanctum_core_fn_method_client_mark_read(void*_Nonnull ptr, int64_t contact_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_NEW_GROUP
@@ -366,6 +376,12 @@ RustBuffer uniffi_sanctum_core_fn_func_disappear_presets(RustCallStatus *_Nonnul
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_PARSE_DISAPPEAR
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_PARSE_DISAPPEAR
 RustBuffer uniffi_sanctum_core_fn_func_parse_disappear(RustBuffer input, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_TOR_STATUS
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_TOR_STATUS
+RustBuffer uniffi_sanctum_core_fn_func_tor_status(RustCallStatus *_Nonnull out_status
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_FFI_SANCTUM_CORE_RUSTBUFFER_ALLOC
@@ -666,6 +682,12 @@ uint16_t uniffi_sanctum_core_checksum_func_parse_disappear(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_TOR_STATUS
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_TOR_STATUS
+uint16_t uniffi_sanctum_core_checksum_func_tor_status(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_ACCEPT_INVITE
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_ACCEPT_INVITE
 uint16_t uniffi_sanctum_core_checksum_method_client_accept_invite(void
@@ -684,6 +706,12 @@ uint16_t uniffi_sanctum_core_checksum_method_client_delete_contact(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_DELETE_MSG
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_DELETE_MSG
+uint16_t uniffi_sanctum_core_checksum_method_client_delete_msg(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_GET_SETTINGS
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_GET_SETTINGS
 uint16_t uniffi_sanctum_core_checksum_method_client_get_settings(void
@@ -693,6 +721,12 @@ uint16_t uniffi_sanctum_core_checksum_method_client_get_settings(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_HAS_API_TOKEN
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_HAS_API_TOKEN
 uint16_t uniffi_sanctum_core_checksum_method_client_has_api_token(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_MARK_READ
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_MARK_READ
+uint16_t uniffi_sanctum_core_checksum_method_client_mark_read(void
     
 );
 #endif

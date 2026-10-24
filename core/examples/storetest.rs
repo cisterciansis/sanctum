@@ -35,6 +35,7 @@ fn main() {
                 delivered: false,
                 reaction: None,
                 sender_seat: None,
+                read_ms: None,
             },
         )
         .expect("add msg");
@@ -66,6 +67,7 @@ fn main() {
                 delivered: false,
                 reaction: None,
                 sender_seat: Some(1),
+                read_ms: None,
             },
         )
         .expect("group message insert");

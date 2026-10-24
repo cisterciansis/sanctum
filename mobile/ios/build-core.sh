@@ -9,9 +9,10 @@ export PATH="$HOME/.cargo/bin:$PATH"
 
 # Match the app's minimum iOS so C deps (OpenSSL, ring) agree with Rust.
 export IPHONEOS_DEPLOYMENT_TARGET=17.0
-# iOS only needs the static library; skip the dylib link.
+# iOS only needs the static library; skip the dylib link. `tor` embeds Arti
+# (no Tor daemon to point at on iOS); it only runs if enabled in Settings.
 for t in aarch64-apple-ios aarch64-apple-ios-sim; do
-  cargo rustc --release -p sanctum-core --features ffi --target "$t" --crate-type staticlib
+  cargo rustc --release -p sanctum-core --features ffi,tor --target "$t" --crate-type staticlib
 done
 cargo build -p sanctum-core --features ffi
 cargo run -q -p sanctum-core --features ffi-cli --bin uniffi-bindgen -- \

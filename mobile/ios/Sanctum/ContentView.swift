@@ -131,6 +131,13 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity)
                         .padding(6)
                         .background(.bar)
+                } else if let tor = model.tor, !tor.ready {
+                    Label(tor.message, systemImage: "network.badge.shield.half.filled")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(6)
+                        .background(.bar)
                 }
             }
         } detail: {
@@ -314,14 +321,33 @@ struct SettingsSheet: View {
                         get: { model.settings.timestamps },
                         set: { model.settings.timestamps = $0; model.saveSettings() }
                     ))
-                    Toggle("Route via tunnel (Tor / UR)", isOn: Binding(
+                    // "tor" = Tor built into the app; there is no local
+                    // proxy to point at on iOS.
+                    Toggle("Route via Tor", isOn: Binding(
                         get: { model.settings.proxyEnabled },
-                        set: { model.settings.proxyEnabled = $0; model.saveSettings() }
+                        set: {
+                            model.settings.proxyEnabled = $0
+                            model.settings.proxyUrl = "tor"
+                            model.saveSettings()
+                        }
                     ))
                 } header: {
                     Text("Messages & network")
                 } footer: {
-                    Text("Tunnel: \(model.settings.proxyUrl) · applies on next launch")
+                    switch (model.settings.proxyEnabled, model.tor) {
+                    case (true, let tor?): Text(tor.message)
+                    case (true, nil): Text("Tor starts on next launch.")
+                    case (false, _?): Text("Direct connection on next launch.")
+                    case (false, nil): Text("Hides your IP address from the storage network. Slower, and the first connect can take up to a minute.")
+                    }
+                }
+                Section {
+                    Toggle("Read Receipts", isOn: Binding(
+                        get: { model.settings.readReceipts },
+                        set: { model.settings.readReceipts = $0; model.saveSettings() }
+                    ))
+                } footer: {
+                    Text("Let people know when you've read their messages. When off, you won't see theirs either.")
                 }
                 Section {
                     if model.hasToken {
@@ -374,6 +400,17 @@ struct ChatView: View {
     @State private var timerInvalid = false
 
     @State private var reveal: CGFloat = 0
+    /// The end-of-list marker is on screen, so new messages may scroll in.
+    @State private var atBottom = true
+
+    /// Sent → Delivered → Read <time> (Read only while receipts are on:
+    /// they're reciprocal).
+    private func receiptLabel(_ msg: MsgVM) -> String {
+        if let at = msg.readAt, model.settings.readReceipts {
+            return "Read " + at.formatted(date: .omitted, time: .shortened)
+        }
+        return msg.delivered ? "Delivered" : "Sent"
+    }
 
     /// Presets and labels come from the core, so every client matches.
     private var timerMenu: some View {
@@ -414,6 +451,8 @@ struct ChatView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 4) {
+                        // Only the newest finished send carries Sent / Delivered.
+                        let lastSent = chat.msgs.last { $0.mine && $0.sent && !$0.failed }
                         ForEach(Array(chat.msgs.enumerated()), id: \.element.id) { i, msg in
                             let prev = i > 0 ? chat.msgs[i - 1] : nil
                             let newDay = prev.map {
@@ -435,7 +474,10 @@ struct ChatView: View {
                             // Swipe left anywhere to slide every bubble over and
                             // reveal exact send times (iMessage gesture).
                             ZStack(alignment: .trailing) {
-                                Bubble(chatId: chat.id, msg: msg, showSender: !sameSender)
+                                Bubble(
+                                    chatId: chat.id, msg: msg, showSender: !sameSender,
+                                    receipt: msg.id == lastSent?.id ? receiptLabel(msg) : nil
+                                )
                                     .offset(x: reveal)
                                 Text(msg.ts.formatted(date: .omitted, time: .shortened))
                                     .font(.caption2)
@@ -446,6 +488,9 @@ struct ChatView: View {
                             }
                             .transition(.scale(scale: 0.96).combined(with: .opacity))
                         }
+                        Color.clear.frame(height: 1)
+                            .onAppear { atBottom = true }
+                            .onDisappear { atBottom = false }
                     }
                     .padding(12)
                 }
@@ -462,7 +507,9 @@ struct ChatView: View {
                 )
                 .animation(.spring(duration: 0.25, bounce: 0.15), value: chat.msgs.count)
                 .onChange(of: chat.msgs.count) {
-                    if let last = chat.msgs.last {
+                    // Follow new messages only if the reader is already at the
+                    // bottom (or just sent one); never yank them mid-scroll.
+                    if let last = chat.msgs.last, atBottom || last.mine {
                         withAnimation(.spring(duration: 0.25)) {
                             proxy.scrollTo(last.id, anchor: .bottom)
                         }
@@ -598,6 +645,7 @@ struct ChatView: View {
         .modifier(CustomTimerAlerts(
             show: $showCustomTimer, text: $customTimer, invalid: $timerInvalid
         ) { model.setDisappear($0) })
+        .onAppear { model.markRead(chat.id) }
     }
 }
 
@@ -631,6 +679,35 @@ struct CustomTimerAlerts: ViewModifier {
             } message: {
                 Text("Use off, or 1 minute to 1 year, like 90m, 36h, 2w, 6mo or 1y.")
             }
+    }
+}
+
+/// Upload indicator under a sending bubble: a thin bar easing toward 90%;
+/// it gives way to "Sent" once the upload finishes.
+struct SendingBar: View {
+    let active: Bool
+    @State private var progress: CGFloat = 0
+    @State private var visible = false
+
+    var body: some View {
+        GeometryReader { g in
+            Rectangle()
+                .fill(Color.accentColor)
+                .frame(width: g.size.width * progress)
+        }
+        .frame(height: 2.5)
+        .opacity(visible ? 1 : 0)
+        .onChange(of: active, initial: true) { _, now in
+            if now {
+                progress = 0
+                visible = true
+                withAnimation(.easeOut(duration: 8)) { progress = 0.9 }
+            } else if visible {
+                withAnimation(.easeOut(duration: 0.25)) { progress = 1 }
+                withAnimation(.easeIn(duration: 0.3).delay(0.35)) { visible = false }
+            }
+        }
+        .accessibilityHidden(true)
     }
 }
 
@@ -723,6 +800,8 @@ struct Bubble: View {
     let chatId: Int64
     let msg: MsgVM
     var showSender = true
+    /// "Sent" or "Delivered", on the newest finished send only.
+    var receipt: String?
 
     var body: some View {
         HStack {
@@ -751,18 +830,37 @@ struct Bubble: View {
                         } label: {
                             Label("Copy", systemImage: "doc.on.doc")
                         }
-                        if msg.mine && !msg.delivered {
+                        if msg.mine && !msg.delivered && !msg.failed {
                             Button(role: .destructive) {
                                 model.unsend(chatId, msg)
                             } label: {
                                 Label("Unsend", systemImage: "arrow.uturn.backward")
                             }
                         }
+                        if msg.mine && msg.delivered && chatId >= 0 {
+                            Button(role: .destructive) {
+                                model.deleteMsg(chatId, msg, everyone: true)
+                            } label: {
+                                Label("Delete for Everyone", systemImage: "trash.slash")
+                            }
+                        }
+                        Button(role: .destructive) {
+                            model.deleteMsg(chatId, msg, everyone: false)
+                        } label: {
+                            Label("Delete for Me", systemImage: "trash")
+                        }
                     }
                 HStack(spacing: 4) {
                     if let r = msg.reaction { Text(r).font(.caption) }
-                    if msg.mine && msg.delivered {
-                        Text("Delivered").font(.caption2).foregroundStyle(.secondary)
+                    if msg.mine && msg.failed {
+                        Label("Not sent", systemImage: "exclamationmark.circle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.red)
+                    } else if msg.mine && !msg.sent {
+                        // This message's own upload progress.
+                        SendingBar(active: true).frame(width: 64)
+                    } else if let receipt {
+                        Text(receipt).font(.caption2).foregroundStyle(.secondary)
                     }
                 }
             }

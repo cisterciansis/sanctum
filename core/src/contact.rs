@@ -149,6 +149,10 @@ pub enum ChatItem {
     Attachment { id: String, name: String, att_key: String },
     Reaction { ref_id: String, emoji: String },
     Timer { secs: u64 },
+    /// The peer deleted one of their messages for everyone.
+    Delete { ref_id: String },
+    /// The peer read these of our messages.
+    Read { refs: Vec<String> },
 }
 
 impl ContactSession {
@@ -231,18 +235,35 @@ impl ContactSession {
     }
 
     fn deposit(&mut self, body: &serde_json::Value) -> Result<String, String> {
+        self.deposit_at(format!("m/{}", ulid::Ulid::new()), body)
+    }
+
+    /// Messages are stored at `m/<wire_id>`, so a restarted client can still
+    /// tell from the bucket whether they were picked up.
+    fn deposit_at(&mut self, key: String, body: &serde_json::Value) -> Result<String, String> {
         let sealed = self.seal(body.to_string().as_bytes())?;
-        let key = format!("m/{}", ulid::Ulid::new());
         self.mbox_out.put(&key, &sealed).map_err(|e| e.to_string())?;
         Ok(key)
     }
 
     pub fn send(&mut self, wire_id: &str, text: &str) -> Result<String, String> {
-        self.deposit(&serde_json::json!({ "t": "m", "id": wire_id, "x": text }))
+        self.deposit_at(format!("m/{wire_id}"), &serde_json::json!({ "t": "m", "id": wire_id, "x": text }))
     }
 
     pub fn react(&mut self, ref_id: &str, emoji: &str) -> Result<(), String> {
         self.deposit(&serde_json::json!({ "t": "r", "ref": ref_id, "e": emoji }))?;
+        Ok(())
+    }
+
+    /// Tell the peer we read these of their messages.
+    pub fn send_read(&mut self, wire_ids: &[String]) -> Result<(), String> {
+        self.deposit(&serde_json::json!({ "t": "read", "ref": wire_ids }))?;
+        Ok(())
+    }
+
+    /// Ask the peer to delete one of our messages from their device.
+    pub fn delete_for_everyone(&mut self, wire_id: &str) -> Result<(), String> {
+        self.deposit(&serde_json::json!({ "t": "del", "ref": wire_id }))?;
         Ok(())
     }
 
@@ -258,13 +279,13 @@ impl ContactSession {
         }
         let name = std::path::Path::new(path)
             .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
+            .map(|n| pretty_file_name(&n.to_string_lossy()))
             .unwrap_or_else(|| "file".into());
         let sealed = self.seal(&bytes)?;
         let att_key = format!("att/{}", ulid::Ulid::new());
         self.mbox_out.put(&att_key, &sealed).map_err(|e| e.to_string())?;
-        let msg_key =
-            self.deposit(&serde_json::json!({ "t": "a", "id": wire_id, "n": name, "k": att_key }))?;
+        let body = serde_json::json!({ "t": "a", "id": wire_id, "n": name, "k": att_key });
+        let msg_key = self.deposit_at(format!("m/{wire_id}"), &body)?;
         Ok((msg_key, name))
     }
 
@@ -309,6 +330,20 @@ impl ContactSession {
                     Some("tmr") => Some(ChatItem::Timer {
                         secs: v.get("s").and_then(|x| x.as_u64()).unwrap_or(0),
                     }),
+                    Some("del") => Some(ChatItem::Delete { ref_id: s("ref") }),
+                    // Peer-controlled: bounded count and id length.
+                    Some("read") => Some(ChatItem::Read {
+                        refs: v
+                            .get("ref")
+                            .and_then(|r| r.as_array())
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|x| x.as_str())
+                            .filter(|x| x.len() <= 64)
+                            .take(MAX_RECEIPT_IDS)
+                            .map(String::from)
+                            .collect(),
+                    }),
                     _ => None,
                 };
                 if let Some(item) = item {
@@ -339,6 +374,12 @@ pub enum Cmd {
     React { contact_id: i64, ref_id: String, emoji: String },
     SetTimer { contact_id: i64, secs: u64 },
     Unsend { contact_id: i64, wire_id: String },
+    /// The user is looking at this chat: mark received messages read and,
+    /// if read receipts are on, tell the peer.
+    MarkRead { contact_id: i64 },
+    /// Delete one message from this device; with `everyone`, also from the
+    /// peer's (own messages in direct chats only).
+    DeleteMsg { contact_id: i64, wire_id: String, everyone: bool },
     /// Remove a chat: retire its buckets (when a provisioning token exists)
     /// and delete it with its history from the store.
     DeleteContact { contact_id: i64 },
@@ -354,8 +395,15 @@ pub enum Event {
     PeerJoined { contact_id: i64 },
     Received { contact_id: i64, msg: StoredMsg },
     Delivered { contact_id: i64, wire_id: String },
+    /// The peer read these own messages (only with read receipts on).
+    Read { contact_id: i64, wire_ids: Vec<String>, ts_ms: i64 },
+    /// An own message finished uploading (it is now waiting to be picked up).
+    Sent { contact_id: i64, wire_id: String },
+    /// An own message never left this device; `error` says why.
+    SendFailed { contact_id: i64, wire_id: String, error: String },
     Reaction { contact_id: i64, ref_id: String, emoji: String },
     TimerChanged { contact_id: i64, secs: u64 },
+    /// A message left the view: unsent, or deleted here or by the peer.
     Unsent { contact_id: i64, wire_id: String },
     ContactRemoved { contact_id: i64 },
     /// Contact/group state changed (e.g. a group seat was claimed).
@@ -368,8 +416,8 @@ pub enum Event {
 struct Live {
     contact: Contact,
     session: ContactSession,
-    /// (wire_id, object key, seen-once) for delivery receipts.
-    pending: Vec<(String, String, bool)>,
+    /// (wire_id, object key, seen-once, put at) for delivery receipts.
+    pending: Vec<(String, String, bool, std::time::Instant)>,
 }
 
 pub fn spawn_worker(
@@ -398,10 +446,27 @@ pub fn spawn_worker(
         let mut snapshot = Vec::new();
         for c in store.contacts().unwrap_or_default() {
             let msgs = store.messages(c.id).unwrap_or_default();
+            // Own messages still in flight at the last exit.
+            let in_flight: Vec<String> =
+                msgs.iter().filter(|m| m.mine && !m.delivered).map(|m| m.wire_id.clone()).collect();
             snapshot.push((c.clone(), msgs));
             let ratchet = store.ratchet(&c.bucket_in).map(|b| Ratchet::load(&me, &b)).transpose();
             match ratchet.map_err(|e| e.to_string()).and_then(|r| ContactSession::new(&c, &me, r)) {
-                Ok(session) => live.push(Live { contact: c, session, pending: Vec::new() }),
+                Ok(session) => {
+                    // Resume receipts for own messages still in flight at the
+                    // last exit (pre-`m/<wire_id>` sends read as delivered).
+                    let long_ago = std::time::Instant::now()
+                        .checked_sub(PUT_VISIBLE)
+                        .unwrap_or_else(std::time::Instant::now);
+                    let pending = in_flight
+                        .into_iter()
+                        .map(|w| {
+                            let key = format!("m/{w}");
+                            (w, key, false, long_ago)
+                        })
+                        .collect();
+                    live.push(Live { contact: c, session, pending })
+                }
                 Err(e) => {
                     let _ = events.send(err(format!("{}: {e}", c.name)));
                 }
@@ -428,12 +493,14 @@ pub fn spawn_worker(
                 }
                 persist_ratchet(&store, l);
                 let cid = l.contact.id;
-                l.pending.retain_mut(|(wire_id, key, seen)| match l.session.is_delivered(key) {
+                l.pending.retain_mut(|(wire_id, key, seen, put_at)| match l.session.is_delivered(key) {
                     Ok(false) => {
                         *seen = true;
                         true
                     }
-                    Ok(true) if *seen => {
+                    // Gone counts once we saw it, or once a fresh PUT has had
+                    // time to become visible (a fast reader can take it first).
+                    Ok(true) if *seen || put_at.elapsed() > PUT_VISIBLE => {
                         let _ = store.set_delivered(cid, wire_id);
                         let _ = events
                             .send(Event::Delivered { contact_id: cid, wire_id: wire_id.clone() });
@@ -468,6 +535,7 @@ pub fn spawn_worker(
                                 delivered: false,
                                 reaction: None,
                                 sender_seat: Some(seat),
+                                read_ms: None,
                             };
                             let _ = store.add_msg(gid, &msg);
                             let _ = events.send(Event::Received { contact_id: gid, msg });
@@ -489,6 +557,13 @@ pub fn spawn_worker(
         }
     });
 }
+
+/// Most message ids one read receipt names (also the cap on what we accept).
+const MAX_RECEIPT_IDS: usize = 200;
+
+/// Hippius makes a PUT visible to HEAD within ~2.5 s; until then "missing"
+/// may just mean "not visible yet", so absence only proves delivery after this.
+const PUT_VISIBLE: std::time::Duration = std::time::Duration::from_secs(10);
 
 fn persist_ratchet(store: &Store, l: &mut Live) {
     if let Some(blob) = l.session.ratchet_update() {
@@ -676,11 +751,15 @@ fn handle_cmd(
                             delivered: false,
                             reaction: None,
                             sender_seat: None,
+                            read_ms: None,
                         },
                     );
-                    l.pending.push((wire_id, key, false));
+                    let _ = events.send(Event::Sent { contact_id, wire_id: wire_id.clone() });
+                    l.pending.push((wire_id, key, false, std::time::Instant::now()));
                 }
-                Err(e) => send_err(e),
+                Err(error) => {
+                    let _ = events.send(Event::SendFailed { contact_id, wire_id, error });
+                }
             }
         }
         Cmd::SendFile { contact_id, wire_id, path } => {
@@ -698,11 +777,15 @@ fn handle_cmd(
                             delivered: false,
                             reaction: None,
                             sender_seat: None,
+                            read_ms: None,
                         },
                     );
-                    l.pending.push((wire_id, key, false));
+                    let _ = events.send(Event::Sent { contact_id, wire_id: wire_id.clone() });
+                    l.pending.push((wire_id, key, false, std::time::Instant::now()));
                 }
-                Err(e) => send_err(e),
+                Err(error) => {
+                    let _ = events.send(Event::SendFailed { contact_id, wire_id, error });
+                }
             }
         }
         Cmd::React { contact_id, ref_id, emoji } => {
@@ -743,7 +826,7 @@ fn handle_cmd(
         Cmd::Unsend { contact_id, wire_id } => {
             let Some(l) = live.iter_mut().find(|l| l.contact.id == contact_id) else { return };
             if let Some(pos) = l.pending.iter().position(|(w, ..)| *w == wire_id) {
-                let (_, key, _) = l.pending.remove(pos);
+                let (_, key, ..) = l.pending.remove(pos);
                 match l.session.unsend(&key) {
                     Ok(()) => {
                         let _ = store.delete_msg(contact_id, &wire_id);
@@ -756,6 +839,33 @@ fn handle_cmd(
                 }
             }
         }
+        Cmd::MarkRead { contact_id } => {
+            let Ok(ids) = store.mark_incoming_read(contact_id) else { return };
+            if ids.is_empty() || !crate::demo::Settings::load().read_receipts {
+                return;
+            }
+            let Some(l) = live.iter_mut().find(|l| l.contact.id == contact_id) else { return };
+            // One receipt per look, naming at most the newest MAX_RECEIPT_IDS.
+            let newest = &ids[ids.len().saturating_sub(MAX_RECEIPT_IDS)..];
+            if let Err(e) = l.session.send_read(newest) {
+                send_err(format!("read receipt: {e}"));
+            }
+        }
+        Cmd::DeleteMsg { contact_id, wire_id, everyone } => {
+            let Some((mine, _)) = store.msg_meta(contact_id, &wire_id) else { return };
+            if everyone {
+                if !mine {
+                    return send_err("you can only delete your own messages for everyone".into());
+                }
+                let Some(l) = live.iter_mut().find(|l| l.contact.id == contact_id) else { return };
+                if let Err(e) = l.session.delete_for_everyone(&wire_id) {
+                    return send_err(format!("delete for everyone: {e}"));
+                }
+                l.pending.retain(|(w, ..)| *w != wire_id);
+            }
+            let _ = store.delete_msg(contact_id, &wire_id);
+            let _ = events.send(Event::Unsent { contact_id, wire_id });
+        }
     }
 }
 
@@ -767,6 +877,8 @@ fn cmd_group_id(cmd: &Cmd) -> Option<i64> {
         | Cmd::React { contact_id, .. }
         | Cmd::SetTimer { contact_id, .. }
         | Cmd::Unsend { contact_id, .. }
+        | Cmd::DeleteMsg { contact_id, .. }
+        | Cmd::MarkRead { contact_id }
         | Cmd::DeleteContact { contact_id }
         | Cmd::ClearHistory { contact_id, .. } => *contact_id,
         _ => return None,
@@ -793,6 +905,7 @@ fn handle_group_cmd(
             let Some(gl) = groups.iter().find(|g| g.group.id == group_id) else { return };
             match gl.send(&wire_id, &text) {
                 Ok(()) => {
+                    let _ = events.send(Event::Sent { contact_id: cid, wire_id: wire_id.clone() });
                     let _ = store.add_msg(
                         cid,
                         &StoredMsg {
@@ -804,10 +917,13 @@ fn handle_group_cmd(
                             delivered: false,
                             reaction: None,
                             sender_seat: None,
+                            read_ms: None,
                         },
                     );
                 }
-                Err(e) => send_err(e),
+                Err(error) => {
+                    let _ = events.send(Event::SendFailed { contact_id: cid, wire_id, error });
+                }
             }
         }
         Cmd::React { ref_id, emoji, .. } => {
@@ -850,6 +966,17 @@ fn handle_group_cmd(
         }
         Cmd::SendFile { .. } => send_err("files in groups are coming soon".into()),
         Cmd::Unsend { .. } => send_err("unsend in groups is coming soon".into()),
+        // Groups have no receipts yet; just keep local read state.
+        Cmd::MarkRead { .. } => {
+            let _ = store.mark_incoming_read(cid);
+        }
+        Cmd::DeleteMsg { everyone: true, .. } => {
+            send_err("delete for everyone in groups is coming soon".into())
+        }
+        Cmd::DeleteMsg { wire_id, .. } => {
+            let _ = store.delete_msg(cid, &wire_id);
+            let _ = events.send(Event::Unsent { contact_id: cid, wire_id });
+        }
         Cmd::SetTimer { .. } => send_err("disappearing timer sync in groups is coming soon".into()),
         _ => {}
     }
@@ -875,6 +1002,7 @@ fn handle_item(item: ChatItem, l: &mut Live, store: &Store, events: &std::sync::
                 delivered: false,
                 reaction: None,
                 sender_seat: None,
+                read_ms: None,
             };
             let _ = store.add_msg(cid, &msg);
             let _ = events.send(Event::Received { contact_id: cid, msg });
@@ -884,12 +1012,13 @@ fn handle_item(item: ChatItem, l: &mut Live, store: &Store, events: &std::sync::
                 let msg = StoredMsg {
                     wire_id: id,
                     mine: false,
-                    text: name,
+                    text: pretty_file_name(&name),
                     file_path: Some(path),
                     ts_ms: crate::store::chrono_now_ms(),
                     delivered: false,
                     reaction: None,
                     sender_seat: None,
+                    read_ms: None,
                 };
                 let _ = store.add_msg(cid, &msg);
                 let _ = events.send(Event::Received { contact_id: cid, msg });
@@ -910,6 +1039,32 @@ fn handle_item(item: ChatItem, l: &mut Live, store: &Store, events: &std::sync::
             let _ = events.send(Event::TimerChanged { contact_id: cid, secs });
         }
         ChatItem::Timer { .. } => {}
+        // Reciprocal: with receipts off we neither send nor record them.
+        // Peer-controlled: set_read only matches our own messages here.
+        ChatItem::Read { refs } => {
+            if !crate::demo::Settings::load().read_receipts {
+                return;
+            }
+            let ts_ms = crate::store::chrono_now_ms();
+            let wire_ids: Vec<String> =
+                refs.into_iter().filter(|r| store.set_read(cid, r, ts_ms).unwrap_or(false)).collect();
+            if !wire_ids.is_empty() {
+                l.pending.retain(|(w, ..)| !wire_ids.contains(w)); // read implies delivered
+                let _ = events.send(Event::Read { contact_id: cid, wire_ids, ts_ms });
+            }
+        }
+        // Peer-controlled: only ever removes a message *they* sent in this
+        // chat, plus the attachment copy we saved for it.
+        ChatItem::Delete { ref_id } => {
+            let Some((false, file)) = store.msg_meta(cid, &ref_id) else { return };
+            if let (Some(path), Some(dir)) = (file, crate::data_dir()) {
+                if std::path::Path::new(&path).starts_with(format!("{dir}/files")) {
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+            let _ = store.delete_msg(cid, &ref_id);
+            let _ = events.send(Event::Unsent { contact_id: cid, wire_id: ref_id });
+        }
     }
 }
 

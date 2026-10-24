@@ -505,9 +505,20 @@ public protocol ClientProtocol: AnyObject, Sendable {
     
     func deleteContact(contactId: Int64) 
     
+    /**
+     * Delete a message here; `everyone` also deletes it on the peer's side.
+     */
+    func deleteMsg(contactId: Int64, wireId: String, everyone: Bool) 
+    
     func getSettings()  -> FfiSettings
     
     func hasApiToken()  -> Bool
+    
+    /**
+     * The user is looking at this chat (call on open and on new messages
+     * while it is on screen).
+     */
+    func markRead(contactId: Int64) 
     
     /**
      * Mint a group (2-6 members): one invite link per other seat arrives in
@@ -632,6 +643,18 @@ open func deleteContact(contactId: Int64)  {try! rustCall() {
 }
 }
     
+    /**
+     * Delete a message here; `everyone` also deletes it on the peer's side.
+     */
+open func deleteMsg(contactId: Int64, wireId: String, everyone: Bool)  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_delete_msg(self.uniffiClonePointer(),
+        FfiConverterInt64.lower(contactId),
+        FfiConverterString.lower(wireId),
+        FfiConverterBool.lower(everyone),$0
+    )
+}
+}
+    
 open func getSettings() -> FfiSettings  {
     return try!  FfiConverterTypeFfiSettings_lift(try! rustCall() {
     uniffi_sanctum_core_fn_method_client_get_settings(self.uniffiClonePointer(),$0
@@ -644,6 +667,17 @@ open func hasApiToken() -> Bool  {
     uniffi_sanctum_core_fn_method_client_has_api_token(self.uniffiClonePointer(),$0
     )
 })
+}
+    
+    /**
+     * The user is looking at this chat (call on open and on new messages
+     * while it is on screen).
+     */
+open func markRead(contactId: Int64)  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_mark_read(self.uniffiClonePointer(),
+        FfiConverterInt64.lower(contactId),$0
+    )
+}
 }
     
     /**
@@ -911,13 +945,20 @@ public struct FfiMsg {
      * Group messages: sender's seat number (None in direct chats).
      */
     public var senderSeat: Int64?
+    /**
+     * Own messages: when the peer read them (read receipts on).
+     */
+    public var readMs: Int64?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
     public init(wireId: String, mine: Bool, delivered: Bool, reaction: String?, text: String, filePath: String?, tsMs: Int64, 
         /**
          * Group messages: sender's seat number (None in direct chats).
-         */senderSeat: Int64?) {
+         */senderSeat: Int64?, 
+        /**
+         * Own messages: when the peer read them (read receipts on).
+         */readMs: Int64?) {
         self.wireId = wireId
         self.mine = mine
         self.delivered = delivered
@@ -926,6 +967,7 @@ public struct FfiMsg {
         self.filePath = filePath
         self.tsMs = tsMs
         self.senderSeat = senderSeat
+        self.readMs = readMs
     }
 }
 
@@ -960,6 +1002,9 @@ extension FfiMsg: Equatable, Hashable {
         if lhs.senderSeat != rhs.senderSeat {
             return false
         }
+        if lhs.readMs != rhs.readMs {
+            return false
+        }
         return true
     }
 
@@ -972,6 +1017,7 @@ extension FfiMsg: Equatable, Hashable {
         hasher.combine(filePath)
         hasher.combine(tsMs)
         hasher.combine(senderSeat)
+        hasher.combine(readMs)
     }
 }
 
@@ -991,7 +1037,8 @@ public struct FfiConverterTypeFfiMsg: FfiConverterRustBuffer {
                 text: FfiConverterString.read(from: &buf), 
                 filePath: FfiConverterOptionString.read(from: &buf), 
                 tsMs: FfiConverterInt64.read(from: &buf), 
-                senderSeat: FfiConverterOptionInt64.read(from: &buf)
+                senderSeat: FfiConverterOptionInt64.read(from: &buf), 
+                readMs: FfiConverterOptionInt64.read(from: &buf)
         )
     }
 
@@ -1004,6 +1051,7 @@ public struct FfiConverterTypeFfiMsg: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.filePath, into: &buf)
         FfiConverterInt64.write(value.tsMs, into: &buf)
         FfiConverterOptionInt64.write(value.senderSeat, into: &buf)
+        FfiConverterOptionInt64.write(value.readMs, into: &buf)
     }
 }
 
@@ -1029,15 +1077,17 @@ public struct FfiSettings {
     public var proxyEnabled: Bool
     public var proxyUrl: String
     public var disappearSecs: UInt64
+    public var readReceipts: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(theme: String, timestamps: Bool, proxyEnabled: Bool, proxyUrl: String, disappearSecs: UInt64) {
+    public init(theme: String, timestamps: Bool, proxyEnabled: Bool, proxyUrl: String, disappearSecs: UInt64, readReceipts: Bool) {
         self.theme = theme
         self.timestamps = timestamps
         self.proxyEnabled = proxyEnabled
         self.proxyUrl = proxyUrl
         self.disappearSecs = disappearSecs
+        self.readReceipts = readReceipts
     }
 }
 
@@ -1063,6 +1113,9 @@ extension FfiSettings: Equatable, Hashable {
         if lhs.disappearSecs != rhs.disappearSecs {
             return false
         }
+        if lhs.readReceipts != rhs.readReceipts {
+            return false
+        }
         return true
     }
 
@@ -1072,6 +1125,7 @@ extension FfiSettings: Equatable, Hashable {
         hasher.combine(proxyEnabled)
         hasher.combine(proxyUrl)
         hasher.combine(disappearSecs)
+        hasher.combine(readReceipts)
     }
 }
 
@@ -1088,7 +1142,8 @@ public struct FfiConverterTypeFfiSettings: FfiConverterRustBuffer {
                 timestamps: FfiConverterBool.read(from: &buf), 
                 proxyEnabled: FfiConverterBool.read(from: &buf), 
                 proxyUrl: FfiConverterString.read(from: &buf), 
-                disappearSecs: FfiConverterUInt64.read(from: &buf)
+                disappearSecs: FfiConverterUInt64.read(from: &buf), 
+                readReceipts: FfiConverterBool.read(from: &buf)
         )
     }
 
@@ -1098,6 +1153,7 @@ public struct FfiConverterTypeFfiSettings: FfiConverterRustBuffer {
         FfiConverterBool.write(value.proxyEnabled, into: &buf)
         FfiConverterString.write(value.proxyUrl, into: &buf)
         FfiConverterUInt64.write(value.disappearSecs, into: &buf)
+        FfiConverterBool.write(value.readReceipts, into: &buf)
     }
 }
 
@@ -1114,6 +1170,76 @@ public func FfiConverterTypeFfiSettings_lift(_ buf: RustBuffer) throws -> FfiSet
 #endif
 public func FfiConverterTypeFfiSettings_lower(_ value: FfiSettings) -> RustBuffer {
     return FfiConverterTypeFfiSettings.lower(value)
+}
+
+
+public struct FfiTorStatus {
+    public var ready: Bool
+    public var message: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(ready: Bool, message: String) {
+        self.ready = ready
+        self.message = message
+    }
+}
+
+#if compiler(>=6)
+extension FfiTorStatus: Sendable {}
+#endif
+
+
+extension FfiTorStatus: Equatable, Hashable {
+    public static func ==(lhs: FfiTorStatus, rhs: FfiTorStatus) -> Bool {
+        if lhs.ready != rhs.ready {
+            return false
+        }
+        if lhs.message != rhs.message {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(ready)
+        hasher.combine(message)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiTorStatus: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTorStatus {
+        return
+            try FfiTorStatus(
+                ready: FfiConverterBool.read(from: &buf), 
+                message: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiTorStatus, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.ready, into: &buf)
+        FfiConverterString.write(value.message, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTorStatus_lift(_ buf: RustBuffer) throws -> FfiTorStatus {
+    return try FfiConverterTypeFfiTorStatus.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTorStatus_lower(_ value: FfiTorStatus) -> RustBuffer {
+    return FfiConverterTypeFfiTorStatus.lower(value)
 }
 
 // Note that we don't yet support `indirect` for enums.
@@ -1134,6 +1260,17 @@ public enum FfiEvent {
     case received(contactId: Int64, msg: FfiMsg
     )
     case delivered(contactId: Int64, wireId: String
+    )
+    case sent(contactId: Int64, wireId: String
+    )
+    case read(contactId: Int64, wireIds: [String], tsMs: Int64
+    )
+    case sendFailed(contactId: Int64, wireId: String, message: String
+    )
+    /**
+     * Unsent, or deleted here or by the peer: drop it from the view.
+     */
+    case removed(contactId: Int64, wireId: String
     )
     case reaction(contactId: Int64, refId: String, emoji: String
     )
@@ -1179,13 +1316,25 @@ public struct FfiConverterTypeFfiEvent: FfiConverterRustBuffer {
         case 7: return .delivered(contactId: try FfiConverterInt64.read(from: &buf), wireId: try FfiConverterString.read(from: &buf)
         )
         
-        case 8: return .reaction(contactId: try FfiConverterInt64.read(from: &buf), refId: try FfiConverterString.read(from: &buf), emoji: try FfiConverterString.read(from: &buf)
+        case 8: return .sent(contactId: try FfiConverterInt64.read(from: &buf), wireId: try FfiConverterString.read(from: &buf)
         )
         
-        case 9: return .history(contactId: try FfiConverterInt64.read(from: &buf), msgs: try FfiConverterSequenceTypeFfiMsg.read(from: &buf)
+        case 9: return .read(contactId: try FfiConverterInt64.read(from: &buf), wireIds: try FfiConverterSequenceString.read(from: &buf), tsMs: try FfiConverterInt64.read(from: &buf)
         )
         
-        case 10: return .errorEvent(message: try FfiConverterString.read(from: &buf)
+        case 10: return .sendFailed(contactId: try FfiConverterInt64.read(from: &buf), wireId: try FfiConverterString.read(from: &buf), message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 11: return .removed(contactId: try FfiConverterInt64.read(from: &buf), wireId: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 12: return .reaction(contactId: try FfiConverterInt64.read(from: &buf), refId: try FfiConverterString.read(from: &buf), emoji: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 13: return .history(contactId: try FfiConverterInt64.read(from: &buf), msgs: try FfiConverterSequenceTypeFfiMsg.read(from: &buf)
+        )
+        
+        case 14: return .errorEvent(message: try FfiConverterString.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -1233,21 +1382,47 @@ public struct FfiConverterTypeFfiEvent: FfiConverterRustBuffer {
             FfiConverterString.write(wireId, into: &buf)
             
         
-        case let .reaction(contactId,refId,emoji):
+        case let .sent(contactId,wireId):
             writeInt(&buf, Int32(8))
+            FfiConverterInt64.write(contactId, into: &buf)
+            FfiConverterString.write(wireId, into: &buf)
+            
+        
+        case let .read(contactId,wireIds,tsMs):
+            writeInt(&buf, Int32(9))
+            FfiConverterInt64.write(contactId, into: &buf)
+            FfiConverterSequenceString.write(wireIds, into: &buf)
+            FfiConverterInt64.write(tsMs, into: &buf)
+            
+        
+        case let .sendFailed(contactId,wireId,message):
+            writeInt(&buf, Int32(10))
+            FfiConverterInt64.write(contactId, into: &buf)
+            FfiConverterString.write(wireId, into: &buf)
+            FfiConverterString.write(message, into: &buf)
+            
+        
+        case let .removed(contactId,wireId):
+            writeInt(&buf, Int32(11))
+            FfiConverterInt64.write(contactId, into: &buf)
+            FfiConverterString.write(wireId, into: &buf)
+            
+        
+        case let .reaction(contactId,refId,emoji):
+            writeInt(&buf, Int32(12))
             FfiConverterInt64.write(contactId, into: &buf)
             FfiConverterString.write(refId, into: &buf)
             FfiConverterString.write(emoji, into: &buf)
             
         
         case let .history(contactId,msgs):
-            writeInt(&buf, Int32(9))
+            writeInt(&buf, Int32(13))
             FfiConverterInt64.write(contactId, into: &buf)
             FfiConverterSequenceTypeFfiMsg.write(msgs, into: &buf)
             
         
         case let .errorEvent(message):
-            writeInt(&buf, Int32(10))
+            writeInt(&buf, Int32(14))
             FfiConverterString.write(message, into: &buf)
             
         }
@@ -1352,6 +1527,30 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeFfiTorStatus: FfiConverterRustBuffer {
+    typealias SwiftType = FfiTorStatus?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiTorStatus.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiTorStatus.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceUInt64: FfiConverterRustBuffer {
     typealias SwiftType = [UInt64]
 
@@ -1369,6 +1568,31 @@ fileprivate struct FfiConverterSequenceUInt64: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterUInt64.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
+    typealias SwiftType = [String]
+
+    public static func write(_ value: [String], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterString.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [String]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterString.read(from: &buf))
         }
         return seq
     }
@@ -1474,6 +1698,15 @@ public func parseDisappear(input: String) -> UInt64?  {
     )
 })
 }
+/**
+ * Embedded Tor progress for the UI; None while Tor isn't in use.
+ */
+public func torStatus() -> FfiTorStatus?  {
+    return try!  FfiConverterOptionTypeFfiTorStatus.lift(try! rustCall() {
+    uniffi_sanctum_core_fn_func_tor_status($0
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -1499,6 +1732,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sanctum_core_checksum_func_parse_disappear() != 6956) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sanctum_core_checksum_func_tor_status() != 2976) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sanctum_core_checksum_method_client_accept_invite() != 12491) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -1508,10 +1744,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sanctum_core_checksum_method_client_delete_contact() != 55898) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sanctum_core_checksum_method_client_delete_msg() != 27541) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sanctum_core_checksum_method_client_get_settings() != 39664) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_method_client_has_api_token() != 59461) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_mark_read() != 52460) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_method_client_new_group() != 58032) {

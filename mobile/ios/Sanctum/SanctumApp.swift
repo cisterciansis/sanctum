@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct SanctumApp: App {
     @StateObject private var model = AppModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -11,6 +12,11 @@ struct SanctumApp: App {
                 .onOpenURL { url in
                     model.join(url.absoluteString)
                 }
+        }
+        // Read receipts only count what's on screen.
+        .onChange(of: scenePhase) { _, phase in
+            model.isActive = phase == .active
+            model.markRead()
         }
     }
 }
@@ -37,6 +43,12 @@ struct MsgVM: Identifiable {
     let id: String
     let mine: Bool
     var delivered: Bool
+    /// Never left this device (only known for this session's sends).
+    var failed = false
+    /// Upload finished (history is always sent; new sends start false).
+    var sent = true
+    /// Own message the peer has read (read receipts on).
+    var readAt: Date?
     var reaction: String?
     let text: String
     let filePath: String?
@@ -49,6 +61,7 @@ func toVM(_ m: FfiMsg) -> MsgVM {
         id: m.wireId,
         mine: m.mine,
         delivered: m.delivered,
+        readAt: m.mine ? m.readMs.map { Date(timeIntervalSince1970: Double($0) / 1000.0) } : nil,
         reaction: m.reaction,
         text: m.text,
         filePath: m.filePath,
@@ -71,10 +84,14 @@ extension AppModel {
 final class AppModel: ObservableObject {
     @Published var chats: [ChatVM] = []
     @Published var selected: Int64?
+    /// App is in the foreground (scene active), so an open chat is being seen.
+    var isActive = true
     @Published var status = "connecting…"
     @Published var inviting = false
     @Published var hasToken = false
     @Published var settings: FfiSettings
+    /// Embedded Tor progress; nil while Tor is off.
+    @Published var tor: FfiTorStatus?
 
     // Exactly one Client: each spawns a worker, and two workers would race
     // on the same chats' ratchet state.
@@ -92,6 +109,8 @@ final class AppModel: ObservableObject {
     }
 
     func tick() {
+        let t = torStatus()
+        if t != tor { tor = t }
         for ev in client.pollEvents() {
             switch ev {
             case .snapshot(let list):
@@ -131,10 +150,29 @@ final class AppModel: ObservableObject {
                     chats[i].msgs.append(toVM(msg))
                     if selected != id { chats[i].unread += 1 }
                 }
+                if selected == id { markRead() }
+            case .read(let id, let wireIds, let tsMs):
+                if let i = idx(id) {
+                    for j in chats[i].msgs.indices where wireIds.contains(chats[i].msgs[j].id) {
+                        chats[i].msgs[j].readAt = Date(timeIntervalSince1970: Double(tsMs) / 1000.0)
+                        chats[i].msgs[j].delivered = true
+                    }
+                }
             case .delivered(let id, let wireId):
                 if let i = idx(id), let j = chats[i].msgs.firstIndex(where: { $0.id == wireId }) {
                     chats[i].msgs[j].delivered = true
                 }
+            case .removed(let id, let wireId):
+                if let i = idx(id) { chats[i].msgs.removeAll { $0.id == wireId } }
+            case .sent(let id, let wireId):
+                if let i = idx(id), let j = chats[i].msgs.firstIndex(where: { $0.id == wireId }) {
+                    chats[i].msgs[j].sent = true
+                }
+            case .sendFailed(let id, let wireId, let message):
+                if let i = idx(id), let j = chats[i].msgs.firstIndex(where: { $0.id == wireId }) {
+                    chats[i].msgs[j].failed = true
+                }
+                status = "error: not sent: \(message)"
             case .reaction(let id, let refId, let emoji):
                 if let i = idx(id), let j = chats[i].msgs.firstIndex(where: { $0.id == refId }) {
                     chats[i].msgs[j].reaction = emoji
@@ -156,7 +194,7 @@ final class AppModel: ObservableObject {
         guard !trimmed.isEmpty else { return }
         let wireId = client.send(contactId: sel, text: trimmed)
         chats[i].msgs.append(MsgVM(
-            id: wireId, mine: true, delivered: false, reaction: nil,
+            id: wireId, mine: true, delivered: false, sent: false, reaction: nil,
             text: trimmed, filePath: nil, senderSeat: nil, ts: Date()
         ))
     }
@@ -175,7 +213,7 @@ final class AppModel: ObservableObject {
         } catch { return }
         let wireId = client.sendFile(contactId: sel, path: url.path)
         chats[i].msgs.append(MsgVM(
-            id: wireId, mine: true, delivered: false, reaction: nil,
+            id: wireId, mine: true, delivered: false, sent: false, reaction: nil,
             text: name, filePath: url.path, senderSeat: nil, ts: Date()
         ))
     }
@@ -236,6 +274,19 @@ final class AppModel: ObservableObject {
         if let i = idx(chatId), let j = chats[i].msgs.firstIndex(where: { $0.id == msg.id }) {
             chats[i].msgs[j].reaction = emoji
         }
+    }
+
+    /// The chat (default: the selected one) is on screen; the core marks it
+    /// read and, with read receipts on, tells the peer.
+    func markRead(_ chatId: Int64? = nil) {
+        if isActive, let id = chatId ?? selected {
+            client.markRead(contactId: id)
+        }
+    }
+
+    /// Removed from the view when the core confirms (it may refuse).
+    func deleteMsg(_ chatId: Int64, _ msg: MsgVM, everyone: Bool) {
+        client.deleteMsg(contactId: chatId, wireId: msg.id, everyone: everyone)
     }
 
     func unsend(_ chatId: Int64, _ msg: MsgVM) {

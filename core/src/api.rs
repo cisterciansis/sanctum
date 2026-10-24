@@ -22,6 +22,8 @@ pub struct FfiMsg {
     pub ts_ms: i64,
     /// Group messages: sender's seat number (None in direct chats).
     pub sender_seat: Option<i64>,
+    /// Own messages: when the peer read them (read receipts on).
+    pub read_ms: Option<i64>,
 }
 
 impl From<StoredMsg> for FfiMsg {
@@ -35,6 +37,7 @@ impl From<StoredMsg> for FfiMsg {
             file_path: m.file_path,
             ts_ms: m.ts_ms,
             sender_seat: m.sender_seat,
+            read_ms: m.read_ms,
         }
     }
 }
@@ -56,6 +59,11 @@ pub enum FfiEvent {
     PeerJoined { contact_id: i64 },
     Received { contact_id: i64, msg: FfiMsg },
     Delivered { contact_id: i64, wire_id: String },
+    Sent { contact_id: i64, wire_id: String },
+    Read { contact_id: i64, wire_ids: Vec<String>, ts_ms: i64 },
+    SendFailed { contact_id: i64, wire_id: String, message: String },
+    /// Unsent, or deleted here or by the peer: drop it from the view.
+    Removed { contact_id: i64, wire_id: String },
     Reaction { contact_id: i64, ref_id: String, emoji: String },
     History { contact_id: i64, msgs: Vec<FfiMsg> },
     ErrorEvent { message: String },
@@ -68,6 +76,7 @@ pub struct FfiSettings {
     pub proxy_enabled: bool,
     pub proxy_url: String,
     pub disappear_secs: u64,
+    pub read_receipts: bool,
 }
 
 #[derive(uniffi::Object)]
@@ -93,6 +102,22 @@ pub fn parse_disappear(input: String) -> Option<u64> {
 #[uniffi::export]
 pub fn disappear_label(secs: u64) -> String {
     crate::demo::disappear_label(secs)
+}
+
+#[derive(uniffi::Record)]
+pub struct FfiTorStatus {
+    pub ready: bool,
+    pub message: String,
+}
+
+/// Embedded Tor progress for the UI; None while Tor isn't in use.
+#[uniffi::export]
+pub fn tor_status() -> Option<FfiTorStatus> {
+    #[cfg(feature = "tor")]
+    let s = crate::tor::status();
+    #[cfg(not(feature = "tor"))]
+    let s = None;
+    s.map(|(ready, message)| FfiTorStatus { ready, message })
 }
 
 #[uniffi::export]
@@ -153,15 +178,18 @@ impl Client {
                 Event::Delivered { contact_id, wire_id } => {
                     FfiEvent::Delivered { contact_id, wire_id }
                 }
+                Event::Sent { contact_id, wire_id } => FfiEvent::Sent { contact_id, wire_id },
+                Event::Read { contact_id, wire_ids, ts_ms } => {
+                    FfiEvent::Read { contact_id, wire_ids, ts_ms }
+                }
+                Event::SendFailed { contact_id, wire_id, error } => {
+                    FfiEvent::SendFailed { contact_id, wire_id, message: error }
+                }
                 Event::Reaction { contact_id, ref_id, emoji } => {
                     FfiEvent::Reaction { contact_id, ref_id, emoji }
                 }
                 Event::TimerChanged { .. } => continue_marker(),
-                Event::Unsent { contact_id, wire_id } => {
-                    // Mobile MVP folds unsend into a history reload later;
-                    // surface it as a delivered-style no-op for now.
-                    FfiEvent::Delivered { contact_id, wire_id }
-                }
+                Event::Unsent { contact_id, wire_id } => FfiEvent::Removed { contact_id, wire_id },
                 Event::History { contact_id, msgs } => FfiEvent::History {
                     contact_id,
                     msgs: msgs.into_iter().map(Into::into).collect(),
@@ -250,6 +278,7 @@ impl Client {
             proxy_enabled: s.proxy_enabled,
             proxy_url: s.proxy_url,
             disappear_secs: s.disappear_secs,
+            read_receipts: s.read_receipts,
         }
     }
 
@@ -260,6 +289,7 @@ impl Client {
         s.proxy_enabled = new.proxy_enabled;
         s.proxy_url = new.proxy_url;
         s.disappear_secs = new.disappear_secs;
+        s.read_receipts = new.read_receipts;
         s.save();
     }
 
@@ -288,6 +318,21 @@ impl Client {
             .lock()
             .expect("outbound lock")
             .send(Cmd::ClearHistory { contact_id, older_than_secs });
+    }
+
+    /// The user is looking at this chat (call on open and on new messages
+    /// while it is on screen).
+    pub fn mark_read(&self, contact_id: i64) {
+        let _ = self.outbound.lock().expect("outbound lock").send(Cmd::MarkRead { contact_id });
+    }
+
+    /// Delete a message here; `everyone` also deletes it on the peer's side.
+    pub fn delete_msg(&self, contact_id: i64, wire_id: String, everyone: bool) {
+        let _ = self
+            .outbound
+            .lock()
+            .expect("outbound lock")
+            .send(Cmd::DeleteMsg { contact_id, wire_id, everyone });
     }
 
     pub fn unsend(&self, contact_id: i64, wire_id: String) {
