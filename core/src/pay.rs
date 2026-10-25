@@ -1,7 +1,7 @@
-//! Bitcoin in chat, bitchat-style, with no Bitcoin keys in Sanctum: Cashu
-//! ecash tokens and lightning:/bitcoin:/BOLT11 links are recognised in
-//! messages and summarised as chips that hand off to an external wallet.
-//! Nothing here contacts a mint or a node.
+//! Bitcoin and Zcash in chat, bitchat-style, with no keys in Sanctum: Cashu
+//! ecash tokens, lightning:/bitcoin:/BOLT11 links and Zcash addresses and
+//! zcash: requests are recognised in messages and summarised as chips that
+//! hand off to an external wallet. Nothing here contacts a mint or a node.
 //!
 //! The Cashu decoder is a port of bitchat's CashuTokenDecoder.swift
 //! (Unlicense). It parses attacker-controlled message text, so every path is
@@ -319,6 +319,7 @@ pub enum PayKind {
     Cashu,
     Lightning,
     Bitcoin,
+    Zcash,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -390,6 +391,9 @@ fn parse_link(word: &str) -> Option<PayLink> {
     }
     if let Some(rest) = strip_prefix_ci(word, "bitcoin:") {
         return parse_bitcoin(rest);
+    }
+    if let Some(link) = parse_zcash(word) {
+        return Some(link);
     }
     let ln = strip_prefix_ci(word, "lightning:").unwrap_or(word).to_ascii_lowercase();
     if ln.len() > MAX_LN_LEN {
@@ -477,10 +481,147 @@ fn parse_bitcoin(rest: &str) -> Option<PayLink> {
     })
 }
 
+/// ZIP-321 `zcash:` requests and bare Zcash addresses, checksums verified:
+/// transparent t1/t3 (Base58Check), Sapling zs (Bech32), Unified u and TEX
+/// (Bech32m). Only amount and (shielded) memo survive from the URI.
+fn parse_zcash(word: &str) -> Option<PayLink> {
+    let (rest, is_uri) = match strip_prefix_ci(word, "zcash:") {
+        Some(r) => (r, true),
+        None => (word, false),
+    };
+    let (addr, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let shielded = zcash_address(addr)?;
+    // Base58 is case-sensitive; Bech32(m) is canonically lowercase.
+    let addr = if addr.starts_with("t1") || addr.starts_with("t3") { addr.to_string() } else { addr.to_ascii_lowercase() };
+    let param = |k: &str| query.split('&').find_map(|kv| kv.strip_prefix(k).map(str::to_string));
+    let amount = param("amount=").filter(|a| {
+        let (whole, frac) = a.split_once('.').unwrap_or((a, ""));
+        is_uri
+            && (1..=8).contains(&whole.len())
+            && frac.len() <= 8
+            && whole.bytes().chain(frac.bytes()).all(|b| b.is_ascii_digit())
+    });
+    // ZIP-321 memos are base64url of up to 512 bytes, for shielded payees.
+    let memo_param = param("memo=").filter(|m| {
+        is_uri && shielded && m.len() <= 684 && m.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    });
+    let memo = memo_param.as_deref().and_then(b64url).and_then(|b| String::from_utf8(b).ok());
+    let params: Vec<String> = [("amount", &amount), ("memo", &memo_param)]
+        .into_iter()
+        .filter_map(|(k, v)| v.as_ref().map(|v| format!("{k}={v}")))
+        .collect();
+    let uri = match params.is_empty() {
+        true => format!("zcash:{addr}"),
+        false => format!("zcash:{addr}?{}", params.join("&")),
+    };
+    let short = format!("{}…{}", &addr[..6], &addr[addr.len() - 4..]);
+    let kind = if shielded { "shielded" } else { "transparent" };
+    Some(PayLink {
+        kind: PayKind::Zcash,
+        uri,
+        raw: addr.clone(),
+        label: match amount {
+            Some(a) => format!("Zcash · {kind} · {short} · {a} ZEC"),
+            None => format!("Zcash · {kind} · {short}"),
+        },
+        memo: memo.as_deref().and_then(sanitized_memo),
+    })
+}
+
+/// Some(shielded?) for a valid mainnet Zcash address.
+fn zcash_address(a: &str) -> Option<bool> {
+    if a.len() > 2048 {
+        return None;
+    }
+    if a.starts_with("t1") || a.starts_with("t3") {
+        let raw = crate::tao::bs58_decode(a)?;
+        let (body, check) = raw.split_at(raw.len().checked_sub(4)?);
+        use sha2::{Digest, Sha256};
+        let ok = raw.len() == 26
+            && matches!(body[..2], [0x1c, 0xb8] | [0x1c, 0xbd])
+            && Sha256::digest(Sha256::digest(body))[..4] == *check;
+        return ok.then_some(false);
+    }
+    // Bech32(m) is single-case.
+    if a.bytes().any(|b| b.is_ascii_lowercase()) && a.bytes().any(|b| b.is_ascii_uppercase()) {
+        return None;
+    }
+    let a = a.to_ascii_lowercase();
+    const BECH32: u32 = 1;
+    const BECH32M: u32 = 0x2bc8_30a3;
+    match a.rsplit_once('1')? {
+        ("zs", d) if d.len() == 75 => bech32_check(&a, BECH32).then_some(true),
+        ("u", _) => bech32_check(&a, BECH32M).then_some(true),
+        ("tex", _) => bech32_check(&a, BECH32M).then_some(false),
+        _ => None,
+    }
+}
+
+/// BIP-173/350 checksum over `hrp1data` (lowercase).
+fn bech32_check(s: &str, constant: u32) -> bool {
+    const CHARSET: &[u8] = b"qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+    let Some((hrp, data)) = s.rsplit_once('1') else { return false };
+    if data.len() < 6 {
+        return false;
+    }
+    let mut values: Vec<u8> = hrp.bytes().map(|b| b >> 5).collect();
+    values.push(0);
+    values.extend(hrp.bytes().map(|b| b & 31));
+    for b in data.bytes() {
+        match CHARSET.iter().position(|&c| c == b) {
+            Some(v) => values.push(v as u8),
+            None => return false,
+        }
+    }
+    let mut chk: u32 = 1;
+    for v in values {
+        let top = chk >> 25;
+        chk = (chk & 0x1ff_ffff) << 5 ^ v as u32;
+        for (i, g) in [0x3b6a_57b2, 0x2650_8e6d, 0x1ea1_19fa, 0x3d42_33dd, 0x2a14_62b3].iter().enumerate() {
+            if (top >> i) & 1 == 1 {
+                chk ^= g;
+            }
+        }
+    }
+    chk == constant
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    /// Vectors from an independent reference encoder (Python, BIP-350
+    /// algorithm and hashlib Base58Check), random payloads.
+    #[test]
+    fn zcash_addresses_and_requests() {
+        let sapling = "zs12tezvedxpsfd9zgctk2sa6ypxcy3vmmtzy730rtvplfeq8lj8xs6p90jp7fe2egvlyuqkaagr2v";
+        let unified = "u13mdjyjntyj9payjw3lg2uts6jjf2xvzlrzxtvyysp70rglaw3pkuv5rhjhk8ghzv8l9javk88c2fxnyx0ms90wnjfxdl5ys7sd4j4s2hymh866c276438suwjt9wp52s27c4nxrljnx8gywhzlc527dj4ggqlwanf7je8l4w6fey3dmzuw44sp0skj35yy";
+        assert_eq!(zcash_address(sapling), Some(true));
+        assert_eq!(zcash_address(unified), Some(true));
+        assert_eq!(zcash_address("tex1wedzh8qa0c8n03zfyx7n7etyat0h79p28jtaql"), Some(false));
+        assert_eq!(zcash_address("t1UJVtMxqZ83ukDxakgKjgs1aWpmKFkRpYm"), Some(false));
+        assert_eq!(zcash_address("t3N2yyXZNZGf4h68QndWDJf1yD4LvYs4ez7"), Some(false));
+        // Wrong checksum flavour, a flipped character, mixed case, junk.
+        assert_eq!(zcash_address("zs1jpglxg9smwpl88484k7s6a8xmmrl8hawej8kgetxvsd8hgnxpucprlp4wq53c4uep5dqq9whvjg"), None);
+        assert_eq!(zcash_address(&sapling.replace("zs12t", "zs12u")), None);
+        assert_eq!(zcash_address("t1UJVtMxqZ83ukDxakgKjgs1aWpmKFkRpYn"), None);
+        assert_eq!(zcash_address("Zs12tezvedxpsfd9zgctk2sa6ypxcy3vmmtzy730rtvplfeq8lj8xs6p90jp7fe2egvlyuqkaagr2v"), None);
+        assert_eq!(zcash_address("u1hello"), None);
+
+        let memo = URL_SAFE_NO_PAD.encode("thanks for lunch");
+        let p = scan(&format!("send to zcash:{sapling}?amount=1.5&memo={memo}&message=<x> please"));
+        assert_eq!(p.links[0].kind, PayKind::Zcash);
+        assert_eq!(p.links[0].uri, format!("zcash:{sapling}?amount=1.5&memo={memo}"));
+        assert_eq!(p.links[0].label, "Zcash · shielded · zs12te…gr2v · 1.5 ZEC");
+        assert_eq!(p.links[0].memo.as_deref(), Some("thanks for lunch"));
+        // Bare addresses are chips too; transparent ones never carry a memo.
+        let p = scan(&format!("my addr {unified} and t1UJVtMxqZ83ukDxakgKjgs1aWpmKFkRpYm"));
+        assert_eq!(p.links.len(), 2);
+        assert_eq!(p.links[1].label, "Zcash · transparent · t1UJVt…RpYm");
+        let p = scan("zcash:t1UJVtMxqZ83ukDxakgKjgs1aWpmKFkRpYm?amount=99999999999&memo=aGk");
+        assert_eq!(p.links[0].uri, "zcash:t1UJVtMxqZ83ukDxakgKjgs1aWpmKFkRpYm");
+    }
 
     fn v3(json: serde_json::Value) -> String {
         format!("cashuA{}", URL_SAFE_NO_PAD.encode(json.to_string()))

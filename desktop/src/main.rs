@@ -2010,6 +2010,7 @@ impl Render for ChatApp {
                         PayKind::Cashu => "🥜",
                         PayKind::Lightning => "⚡",
                         PayKind::Bitcoin => "₿",
+                        PayKind::Zcash => "ⓩ",
                     };
                     let (uri, raw) = (l.uri.clone(), l.raw.clone());
                     let action = |id: &'static str, label: &'static str| {

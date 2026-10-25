@@ -109,7 +109,7 @@ pub fn address_of(acc: &AccountId32) -> String {
     acc.to_string() // subxt formats with the generic prefix 42
 }
 
-fn bs58_decode(s: &str) -> Option<Vec<u8>> {
+pub(crate) fn bs58_decode(s: &str) -> Option<Vec<u8>> {
     const ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
     if s.is_empty() || s.len() > 64 {
         return None;

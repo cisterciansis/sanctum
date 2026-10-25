@@ -10,6 +10,7 @@ struct WalletScreen: View {
     @State private var watchText = ""
     @State private var revealFor: String?
     @State private var forgetFor: String?
+    @State private var shown: FfiTaoAccount?
 
     var body: some View {
         Form {
@@ -21,7 +22,7 @@ struct WalletScreen: View {
                 } header: {
                     Text(w.testnet ? "Testnet" : "Mainnet")
                 } footer: {
-                    Text("Payments in chats come from the checked account. Watch-only accounts show a balance but can't send.")
+                    Text("Tap an account for its QR code. Payments in chats come from the checked one; watch-only accounts show a balance but can't send.")
                 }
             } else {
                 Section {
@@ -76,11 +77,12 @@ struct WalletScreen: View {
             Text("Its keys are deleted from this device. Without its recovery phrase, its TAO can't be recovered.")
         }
         .sheet(item: $model.phrase) { p in PhraseSheet(phrase: p) }
+        .sheet(item: $shown) { a in AccountSheet(account: a, active: model.wallet?.active == a.address) }
     }
 
     private func accountRow(_ a: FfiTaoAccount, active: Bool) -> some View {
         Button {
-            model.taoUse(a.address)
+            shown = a
         } label: {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
@@ -97,9 +99,15 @@ struct WalletScreen: View {
                 if active { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
             }
         }
+        .tint(.primary) // a row, not a link
         .contextMenu {
             Button { UIPasteboard.general.string = a.address } label: {
                 Label("Copy Address", systemImage: "doc.on.doc")
+            }
+            if !active && !a.watchOnly {
+                Button { model.taoUse(a.address) } label: {
+                    Label("Pay From This Account", systemImage: "checkmark.circle")
+                }
             }
             if !a.watchOnly {
                 Button { revealFor = a.address } label: {
@@ -129,6 +137,10 @@ struct TaoSymbol: View {
             }
             .accessibilityLabel("TAO")
     }
+}
+
+extension FfiTaoAccount: Identifiable {
+    public var id: String { address }
 }
 
 struct PhraseVM: Identifiable {

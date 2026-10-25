@@ -441,6 +441,7 @@ struct ChatView: View {
     @State private var showPhotoPicker = false
     @State private var showFileImporter = false
     @State private var taoAction: TaoAction?
+    @State private var linkPayment: LinkPayment?
     @State private var showRename = false
     @State private var renameText = ""
     @State private var showCustomTimer = false
@@ -583,17 +584,27 @@ struct ChatView: View {
                     }
                     if chat.id >= 0 {
                         Divider()
-                        Button { taoAction = .send } label: {
-                            Label("Send TAO", systemImage: "arrow.up.circle")
+                        // Money, grouped so the attach menu stays short.
+                        Menu {
+                            Button { taoAction = .send } label: { Label("TAO", systemImage: "arrow.up.circle") }
+                            Button { linkPayment = .cashu } label: { Label("Cashu Token", systemImage: "banknote") }
+                        } label: {
+                            Label("Pay", systemImage: "arrow.up.circle")
                         }
-                        Button { taoAction = .request } label: {
-                            Label("Request TAO", systemImage: "arrow.down.circle")
+                        Menu {
+                            Button { taoAction = .request } label: { Label("TAO", systemImage: "arrow.down.circle") }
+                            Button { linkPayment = .lightning } label: { Label("Lightning Invoice", systemImage: "bolt.fill") }
+                            Button { linkPayment = .bitcoin } label: { Label("Bitcoin Address", systemImage: "bitcoinsign.circle") }
+                            Button { linkPayment = .zcash } label: { Label("Zcash Address", systemImage: "z.circle") }
+                            Divider()
+                            Button { model.taoShare(chat.id) } label: { Label("Share My TAO Address", systemImage: "person.crop.circle") }
+                        } label: {
+                            Label("Request", systemImage: "arrow.down.circle")
                         }
-                        Button { taoAction = .cheque } label: {
-                            Label("TAO Cheque", systemImage: "signature")
-                        }
-                        Button { model.taoShare(chat.id) } label: {
-                            Label("Share TAO Address", systemImage: "qrcode")
+                        Menu {
+                            Button { taoAction = .cheque } label: { Label("TAO Cheque", systemImage: "signature") }
+                        } label: {
+                            Label("Offline Cheque", systemImage: "signature")
                         }
                     }
                 } label: {
@@ -605,6 +616,7 @@ struct ChatView: View {
                 }
                 .disabled(chat.waiting)
                 .sheet(item: $taoAction) { a in TaoSheet(chatId: chat.id, action: a) }
+                .sheet(item: $linkPayment) { p in LinkPaymentSheet(payment: p) }
                 .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
                 .onChange(of: photoItem) {
                     guard let item = photoItem else { return }
@@ -948,6 +960,7 @@ struct PayChip: View {
         case .cashu: "banknote"
         case .lightning: "bolt.fill"
         case .bitcoin: "bitcoinsign.circle"
+        case .zcash: "z.circle"
         }
     }
 

@@ -10,6 +10,7 @@
 		03DFBA15C5D6A5B6904576EF /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 20D882FECEBA461D22FFAB95 /* Assets.xcassets */; };
 		214035AEA77DC22285C4EAEB /* SanctumApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5EBEB4EED7822BA38A7789B /* SanctumApp.swift */; };
 		2E338BDA63BD758AD913AA64 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 616F6AC98B07E5EA3DE3E8C4 /* ContentView.swift */; };
+		3C552D819C838A0CC1C8D6AB /* Payments.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FFAB156A2150A98FB46C4FB /* Payments.swift */; };
 		83CF946BB81DA1E6ECCDECF8 /* Logo.swift in Sources */ = {isa = PBXBuildFile; fileRef = A252EE8707E56B6A7AD2A4FE /* Logo.swift */; };
 		9468DD6A53E0FEC657A84C34 /* SanctumCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5BE3D609CE2C5DC0353355F4 /* SanctumCore.xcframework */; };
 		9F331A3C4F6E838D30FB91AD /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 0A6CE51F42B9AAA51775FDF1 /* AppIcon.icon */; };
@@ -32,6 +33,7 @@
 		81A8DE0A1CF5E2BE330DCAAD /* Mesh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Mesh.swift; sourceTree = "<group>"; };
 		872042FFF619C23367F3E8D5 /* Bridging.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Bridging.h; sourceTree = "<group>"; };
 		9D5B60C0AEB02B7045A7944F /* Wallet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Wallet.swift; sourceTree = "<group>"; };
+		9FFAB156A2150A98FB46C4FB /* Payments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Payments.swift; sourceTree = "<group>"; };
 		A252EE8707E56B6A7AD2A4FE /* Logo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Logo.swift; sourceTree = "<group>"; };
 		CD05641E48D8E5E6F7FEDEF4 /* Sanctum.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Sanctum.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F5EBEB4EED7822BA38A7789B /* SanctumApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SanctumApp.swift; sourceTree = "<group>"; };
@@ -85,6 +87,7 @@
 				45DC6F29EDF26C607C64FD32 /* Info.plist */,
 				A252EE8707E56B6A7AD2A4FE /* Logo.swift */,
 				81A8DE0A1CF5E2BE330DCAAD /* Mesh.swift */,
+				9FFAB156A2150A98FB46C4FB /* Payments.swift */,
 				F5EBEB4EED7822BA38A7789B /* SanctumApp.swift */,
 				12B2B17025D4D4314617EECF /* Splash.swift */,
 				9D5B60C0AEB02B7045A7944F /* Wallet.swift */,
@@ -178,6 +181,7 @@
 				2E338BDA63BD758AD913AA64 /* ContentView.swift in Sources */,
 				83CF946BB81DA1E6ECCDECF8 /* Logo.swift in Sources */,
 				C73D9246E3AF504CB8E00A12 /* Mesh.swift in Sources */,
+				3C552D819C838A0CC1C8D6AB /* Payments.swift in Sources */,
 				214035AEA77DC22285C4EAEB /* SanctumApp.swift in Sources */,
 				B52C100142D5F7754D32837F /* Splash.swift in Sources */,
 				BF1B9CABE07610FC019147F3 /* Wallet.swift in Sources */,

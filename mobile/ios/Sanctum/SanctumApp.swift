@@ -344,7 +344,9 @@ final class AppModel: ObservableObject {
     func taoRefresh() { client.taoRefresh() }
     func taoNew() { client.taoNew(name: "Account \((wallet?.accounts.count ?? 0) + 1)") }
     func taoImport(_ phrase: String) { client.taoImport(name: "Imported", phrase: phrase) }
-    func taoWatch(_ address: String) { client.taoWatch(name: "Watch-only", address: address) }
+    func taoWatch(_ address: String) {
+        client.taoWatch(name: "Account \((wallet?.accounts.count ?? 0) + 1)", address: address)
+    }
     func taoUse(_ address: String) { client.taoUse(address: address) }
     func taoForget(_ address: String) { client.taoForget(address: address) }
     func taoReveal(_ address: String) { client.taoReveal(address: address) }

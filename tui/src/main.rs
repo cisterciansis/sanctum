@@ -1135,6 +1135,7 @@ impl App {
                         PayKind::Cashu => "🥜",
                         PayKind::Lightning => "⚡",
                         PayKind::Bitcoin => "₿",
+                        PayKind::Zcash => "ⓩ",
                     };
                     let memo = l.memo.as_ref().map(|m| format!(" · {m}")).unwrap_or_default();
                     let chip = format!(" {icon} {}{memo} ", l.label);

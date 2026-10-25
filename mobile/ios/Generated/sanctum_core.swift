@@ -2319,6 +2319,7 @@ public enum PayKind {
     case cashu
     case lightning
     case bitcoin
+    case zcash
 }
 
 
@@ -2342,6 +2343,8 @@ public struct FfiConverterTypePayKind: FfiConverterRustBuffer {
         
         case 3: return .bitcoin
         
+        case 4: return .zcash
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -2360,6 +2363,10 @@ public struct FfiConverterTypePayKind: FfiConverterRustBuffer {
         
         case .bitcoin:
             writeInt(&buf, Int32(3))
+        
+        
+        case .zcash:
+            writeInt(&buf, Int32(4))
         
         }
     }
