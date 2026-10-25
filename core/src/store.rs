@@ -213,12 +213,30 @@ impl Store {
         Ok(())
     }
 
+    /// A contact's mesh outbox (opaque blob), keyed by its inbox bucket.
+    pub fn outbox(&self, bucket_in: &str) -> Option<String> {
+        self.conn
+            .query_row("SELECT v FROM kv WHERE k = 'outbox/' || ?1", [bucket_in], |r| r.get(0))
+            .ok()
+    }
+
+    pub fn set_outbox(&self, bucket_in: &str, blob: &str) -> Result<(), Error> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO kv (k, v) VALUES ('outbox/' || ?1, ?2)",
+                rusqlite::params![bucket_in, blob],
+            )
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+        Ok(())
+    }
+
     /// Remove a contact, its entire history and its ratchet keys.
     pub fn delete_contact(&self, contact_id: i64) -> Result<(), Error> {
         self.conn
             .execute(
-"DELETE FROM kv WHERE k =
-                 'ratchet/' || (SELECT bucket_in FROM contacts WHERE id = ?1)",
+"DELETE FROM kv WHERE k IN
+                 ('ratchet/' || (SELECT bucket_in FROM contacts WHERE id = ?1),
+                  'outbox/' || (SELECT bucket_in FROM contacts WHERE id = ?1))",
                 rusqlite::params![contact_id],
             )
             .map_err(|e| Error::Crypto(e.to_string()))?;

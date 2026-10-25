@@ -302,6 +302,11 @@ int8_t uniffi_sanctum_core_fn_method_client_has_api_token(void*_Nonnull ptr, Rus
 void uniffi_sanctum_core_fn_method_client_mark_read(void*_Nonnull ptr, int64_t contact_id, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_MESH_RECEIVE
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_MESH_RECEIVE
+RustBuffer uniffi_sanctum_core_fn_method_client_mesh_receive(void*_Nonnull ptr, RustBuffer link, RustBuffer frame, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_NEW_GROUP
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_NEW_GROUP
 void uniffi_sanctum_core_fn_method_client_new_group(void*_Nonnull ptr, RustBuffer name, int64_t size, RustCallStatus *_Nonnull out_status
@@ -371,6 +376,27 @@ RustBuffer uniffi_sanctum_core_fn_func_disappear_label(uint64_t secs, RustCallSt
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_DISAPPEAR_PRESETS
 RustBuffer uniffi_sanctum_core_fn_func_disappear_presets(RustCallStatus *_Nonnull out_status
     
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_MESH_FRAMES
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_MESH_FRAMES
+RustBuffer uniffi_sanctum_core_fn_func_mesh_frames(RustBuffer packet, uint32_t mtu, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_MESH_LINK_CLOSED
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_MESH_LINK_CLOSED
+void uniffi_sanctum_core_fn_func_mesh_link_closed(RustBuffer link, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_MESH_OUTBOX
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_MESH_OUTBOX
+RustBuffer uniffi_sanctum_core_fn_func_mesh_outbox(RustCallStatus *_Nonnull out_status
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_MESH_SET_LINKS
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_MESH_SET_LINKS
+void uniffi_sanctum_core_fn_func_mesh_set_links(uint32_t count, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_PARSE_DISAPPEAR
@@ -676,6 +702,30 @@ uint16_t uniffi_sanctum_core_checksum_func_disappear_presets(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_MESH_FRAMES
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_MESH_FRAMES
+uint16_t uniffi_sanctum_core_checksum_func_mesh_frames(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_MESH_LINK_CLOSED
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_MESH_LINK_CLOSED
+uint16_t uniffi_sanctum_core_checksum_func_mesh_link_closed(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_MESH_OUTBOX
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_MESH_OUTBOX
+uint16_t uniffi_sanctum_core_checksum_func_mesh_outbox(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_MESH_SET_LINKS
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_MESH_SET_LINKS
+uint16_t uniffi_sanctum_core_checksum_func_mesh_set_links(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_PARSE_DISAPPEAR
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_PARSE_DISAPPEAR
 uint16_t uniffi_sanctum_core_checksum_func_parse_disappear(void
@@ -727,6 +777,12 @@ uint16_t uniffi_sanctum_core_checksum_method_client_has_api_token(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_MARK_READ
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_MARK_READ
 uint16_t uniffi_sanctum_core_checksum_method_client_mark_read(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_MESH_RECEIVE
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_MESH_RECEIVE
+uint16_t uniffi_sanctum_core_checksum_method_client_mesh_receive(void
     
 );
 #endif

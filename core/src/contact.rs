@@ -7,6 +7,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64, Engine};
 use serde::{Deserialize, Serialize};
 
 use crate::crypto_box::PublicKey;
+use crate::mesh::{self, MESH};
 use crate::provision::Provisioner;
 use crate::store::{Contact, Store, StoredMsg};
 use crate::transport::Mailbox;
@@ -121,10 +122,13 @@ pub fn accept_invite(
         let inviter = session.peer_pk.as_ref().ok_or("invite has no key")?;
         session.ratchet = Some(Ratchet::accept(me, &bundle, inviter).map_err(|e| e.to_string())?);
     }
+    // The inviter can't read our mesh tags before this hello: Hippius only.
+    let mesh_key = session.mesh_key.take();
     session.deposit(&serde_json::json!({
         "t": "hello",
         "pk": B64.encode(me.public().as_bytes()),
     }))?;
+    session.mesh_key = mesh_key;
     if session.ratchet.is_some() {
         let _ = session.mbox_in.delete(BUNDLE_KEY);
     }
@@ -141,7 +145,30 @@ pub struct ContactSession {
     dirty: bool,
     mbox_in: Mailbox,
     mbox_out: Mailbox,
+    /// Pair key for mesh tags and acks; None until the peer's key is known.
+    mesh_key: Option<[u8; 32]>,
+    /// Sealed objects offered to the mesh and not yet on Hippius: each waits
+    /// for an ack, then for the network. Persisted, so nothing is lost or
+    /// misread as delivered across a restart.
+    outbox: Vec<Outgoing>,
+    /// Outbox changed since the last `outbox_update`.
+    outbox_dirty: bool,
+    /// Digests of envelopes the mesh delivered, to drop their Hippius copy.
+    mesh_seen: std::collections::VecDeque<[u8; 16]>,
 }
+
+struct Outgoing {
+    key: String,
+    sealed: Vec<u8>,
+    ack: [u8; 16],
+    /// Last attempt (mesh send or upload).
+    at: std::time::Instant,
+}
+
+/// How long the mesh gets to ack before Hippius takes over; also the
+/// upload retry interval while offline.
+const MESH_ACK_WAIT: std::time::Duration = std::time::Duration::from_secs(8);
+const MESH_SEEN_CAP: usize = 256;
 
 pub enum ChatItem {
     Hello { pk: String },
@@ -169,6 +196,10 @@ impl ContactSession {
         };
         Ok(Self {
             me_secret: me.to_b64(),
+            mesh_key: peer_pk.as_ref().and_then(|pk| mesh::pair_key(me, pk)),
+            outbox: Vec::new(),
+            outbox_dirty: false,
+            mesh_seen: Default::default(),
             peer_pk,
             dirty: ratchet.is_some(),
             ratchet,
@@ -189,7 +220,9 @@ impl ContactSession {
             .map_err(|e| e.to_string())?
             .try_into()
             .map_err(|_| "bad peer pk")?;
-        self.peer_pk = Some(PublicKey::from_bytes(bytes));
+        let pk = PublicKey::from_bytes(bytes);
+        self.mesh_key = mesh::pair_key(&self.me(), &pk);
+        self.peer_pk = Some(pk);
         Ok(())
     }
 
@@ -242,8 +275,98 @@ impl ContactSession {
     /// tell from the bucket whether they were picked up.
     fn deposit_at(&mut self, key: String, body: &serde_json::Value) -> Result<String, String> {
         let sealed = self.seal(body.to_string().as_bytes())?;
-        self.mbox_out.put(&key, &sealed).map_err(|e| e.to_string())?;
+        if !self.via_mesh(&key, &sealed) {
+            self.mbox_out.put(&key, &sealed).map_err(|e| e.to_string())?;
+        }
         Ok(key)
+    }
+
+    /// Bluetooth first when any Sanctum device is in range: the object waits
+    /// in the outbox for the peer's ack, and goes to Hippius if none comes.
+    /// Ratchet (v2) envelopes only, which a relay can't replay.
+    fn via_mesh(&mut self, key: &str, sealed: &[u8]) -> bool {
+        let (Some(k), Some(peer)) = (&self.mesh_key, &self.peer_pk) else { return false };
+        if crate::version(sealed) != 2
+            || mesh::HEADER + sealed.len() > mesh::MAX_PACKET
+            || MESH.neighbors() == 0
+        {
+            return false;
+        }
+        let tag = mesh::tag(k, peer, mesh::epoch_now());
+        MESH.send(mesh::Packet { kind: mesh::ENVELOPE, ttl: mesh::TTL, tag, body: sealed.to_vec() });
+        self.outbox.push(Outgoing {
+            key: key.into(),
+            sealed: sealed.to_vec(),
+            ack: mesh::ack_token(k, sealed),
+            at: std::time::Instant::now(),
+        });
+        self.outbox_dirty = true;
+        true
+    }
+
+    /// Upload what the mesh didn't deliver in time; retried while offline.
+    pub fn flush_outbox(&mut self) {
+        let mbox = &self.mbox_out;
+        let before = self.outbox.len();
+        self.outbox.retain_mut(|o| {
+            if o.at.elapsed() < MESH_ACK_WAIT {
+                return true;
+            }
+            o.at = std::time::Instant::now();
+            mbox.put(&o.key, &o.sealed).is_err()
+        });
+        self.outbox_dirty |= self.outbox.len() != before;
+    }
+
+    /// The peer acked one of our objects over the mesh; returns its key.
+    pub fn mesh_acked(&mut self, token: &[u8; 16]) -> Option<String> {
+        let i = self.outbox.iter().position(|o| o.ack == *token)?;
+        self.outbox_dirty = true;
+        Some(self.outbox.remove(i).key)
+    }
+
+    /// Tags the peer addresses us by around now (one epoch of clock skew).
+    pub fn mesh_tags(&self) -> Vec<[u8; 16]> {
+        let Some(k) = &self.mesh_key else { return Vec::new() };
+        let (me, e) = (self.me().public(), mesh::epoch_now());
+        [e.saturating_sub(1), e, e + 1].iter().map(|&e| mesh::tag(k, &me, e)).collect()
+    }
+
+    /// An envelope that came over the mesh with one of our tags. Returns the
+    /// item (None if unknown to this client) and the ack to send back, or
+    /// None if it doesn't open.
+    pub fn open_mesh(&mut self, sealed: &[u8]) -> Option<(Option<ChatItem>, [u8; 16])> {
+        let k = self.mesh_key?;
+        if crate::version(sealed) != 2 {
+            return None;
+        }
+        let (from, pt) = self.unseal(sealed).ok()?;
+        if self.mesh_seen.len() >= MESH_SEEN_CAP {
+            self.mesh_seen.pop_front();
+        }
+        self.mesh_seen.push_back(mesh::digest(sealed));
+        Some((parse_item(&from, &pt), mesh::ack_token(&k, sealed)))
+    }
+
+    /// Outbox to persist, if it changed: JSON [[key, b64 envelope], ...].
+    pub fn outbox_update(&mut self) -> Option<String> {
+        if !std::mem::take(&mut self.outbox_dirty) {
+            return None;
+        }
+        let rows: Vec<(&str, String)> =
+            self.outbox.iter().map(|o| (o.key.as_str(), B64.encode(&o.sealed))).collect();
+        Some(serde_json::to_string(&rows).expect("outbox serializes"))
+    }
+
+    /// Reload a persisted outbox; it goes to Hippius on the next flush.
+    pub fn restore_outbox(&mut self, blob: &str) {
+        let Some(k) = self.mesh_key else { return };
+        let rows: Vec<(String, String)> = serde_json::from_str(blob).unwrap_or_default();
+        let due = std::time::Instant::now().checked_sub(MESH_ACK_WAIT);
+        for (key, sealed) in rows {
+            let (Ok(sealed), Some(at)) = (B64.decode(sealed), due) else { continue };
+            self.outbox.push(Outgoing { ack: mesh::ack_token(&k, &sealed), key, sealed, at });
+        }
     }
 
     pub fn send(&mut self, wire_id: &str, text: &str) -> Result<String, String> {
@@ -302,10 +425,21 @@ impl ContactSession {
     }
 
     pub fn is_delivered(&self, key: &str) -> Result<bool, String> {
+        if self.outbox.iter().any(|o| o.key == key) {
+            return Ok(false);
+        }
         Ok(!self.mbox_out.exists(key).map_err(|e| e.to_string())?)
     }
 
-    pub fn unsend(&self, key: &str) -> Result<(), String> {
+    /// Something still in the outbox never reached Hippius (the mesh may
+    /// have carried it already; that can't be recalled).
+    pub fn unsend(&mut self, key: &str) -> Result<(), String> {
+        let before = self.outbox.len();
+        self.outbox.retain(|o| o.key != key);
+        if self.outbox.len() != before {
+            self.outbox_dirty = true;
+            return Ok(());
+        }
         self.mbox_out.delete(key).map_err(|e| e.to_string())
     }
 
@@ -316,45 +450,47 @@ impl ContactSession {
         let Ok(keys) = self.mbox_in.list("m/") else { return out };
         for key in keys {
             let Ok(raw) = self.mbox_in.get(&key) else { continue };
+            if self.mesh_seen.contains(&mesh::digest(&raw)) {
+                let _ = self.mbox_in.delete(&key);
+                continue;
+            }
             let Ok((from, pt)) = self.unseal(&raw) else { continue };
-            let txt = String::from_utf8_lossy(&pt);
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
-                let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string();
-                let item = match v.get("t").and_then(|t| t.as_str()) {
-                    Some("hello") => Some(ChatItem::Hello { pk: B64.encode(from.as_bytes()) }),
-                    Some("m") => Some(ChatItem::Message { id: s("id"), text: s("x") }),
-                    Some("a") => {
-                        Some(ChatItem::Attachment { id: s("id"), name: s("n"), att_key: s("k") })
-                    }
-                    Some("r") => Some(ChatItem::Reaction { ref_id: s("ref"), emoji: s("e") }),
-                    Some("tmr") => Some(ChatItem::Timer {
-                        secs: v.get("s").and_then(|x| x.as_u64()).unwrap_or(0),
-                    }),
-                    Some("del") => Some(ChatItem::Delete { ref_id: s("ref") }),
-                    // Peer-controlled: bounded count and id length.
-                    Some("read") => Some(ChatItem::Read {
-                        refs: v
-                            .get("ref")
-                            .and_then(|r| r.as_array())
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|x| x.as_str())
-                            .filter(|x| x.len() <= 64)
-                            .take(MAX_RECEIPT_IDS)
-                            .map(String::from)
-                            .collect(),
-                    }),
-                    _ => None,
-                };
-                if let Some(item) = item {
-                    out.push(item);
-                    let _ = self.mbox_in.delete(&key);
-                    continue;
-                }
+            if let Some(item) = parse_item(&from, &pt) {
+                out.push(item);
+                let _ = self.mbox_in.delete(&key);
+                continue;
             }
             // Unknown payloads are left in place for a newer client.
         }
         out
+    }
+}
+
+/// A decrypted chat payload; None for types this client doesn't know.
+fn parse_item(from: &PublicKey, pt: &[u8]) -> Option<ChatItem> {
+    let v = serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(pt)).ok()?;
+    let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string();
+    match v.get("t").and_then(|t| t.as_str()) {
+        Some("hello") => Some(ChatItem::Hello { pk: B64.encode(from.as_bytes()) }),
+        Some("m") => Some(ChatItem::Message { id: s("id"), text: s("x") }),
+        Some("a") => Some(ChatItem::Attachment { id: s("id"), name: s("n"), att_key: s("k") }),
+        Some("r") => Some(ChatItem::Reaction { ref_id: s("ref"), emoji: s("e") }),
+        Some("tmr") => Some(ChatItem::Timer { secs: v.get("s").and_then(|x| x.as_u64()).unwrap_or(0) }),
+        Some("del") => Some(ChatItem::Delete { ref_id: s("ref") }),
+        // Peer-controlled: bounded count and id length.
+        Some("read") => Some(ChatItem::Read {
+            refs: v
+                .get("ref")
+                .and_then(|r| r.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|x| x.as_str())
+                .filter(|x| x.len() <= 64)
+                .take(MAX_RECEIPT_IDS)
+                .map(String::from)
+                .collect(),
+        }),
+        _ => None,
     }
 }
 
@@ -386,6 +522,8 @@ pub enum Cmd {
     /// Clear local history: all of it, or only messages older than
     /// `older_than_secs`.
     ClearHistory { contact_id: i64, older_than_secs: Option<u64> },
+    /// A packet the Bluetooth mesh delivered (possibly for someone else).
+    Mesh(mesh::Packet),
 }
 
 pub enum Event {
@@ -452,7 +590,10 @@ pub fn spawn_worker(
             snapshot.push((c.clone(), msgs));
             let ratchet = store.ratchet(&c.bucket_in).map(|b| Ratchet::load(&me, &b)).transpose();
             match ratchet.map_err(|e| e.to_string()).and_then(|r| ContactSession::new(&c, &me, r)) {
-                Ok(session) => {
+                Ok(mut session) => {
+                    if let Some(blob) = store.outbox(&c.bucket_in) {
+                        session.restore_outbox(&blob);
+                    }
                     // Resume receipts for own messages still in flight at the
                     // last exit (pre-`m/<wire_id>` sends read as delivered).
                     let long_ago = std::time::Instant::now()
@@ -485,13 +626,14 @@ pub fn spawn_worker(
             while let Ok(cmd) = outbound.try_recv() {
                 handle_cmd(cmd, &store, &me, &mut live, &mut groups, &events);
             }
-            live.iter_mut().for_each(|l| persist_ratchet(&store, l));
+            live.iter_mut().for_each(|l| persist_session(&store, l));
 
             for l in &mut live {
                 for item in l.session.poll() {
                     handle_item(item, l, &store, &events);
                 }
-                persist_ratchet(&store, l);
+                l.session.flush_outbox();
+                persist_session(&store, l);
                 let cid = l.contact.id;
                 l.pending.retain_mut(|(wire_id, key, seen, put_at)| match l.session.is_delivered(key) {
                     Ok(false) => {
@@ -559,7 +701,19 @@ pub fn spawn_worker(
                     let _ = events.send(Event::Unsent { contact_id, wire_id });
                 }
             }
-            std::thread::sleep(std::time::Duration::from_millis(1500));
+            // Wait out the poll interval, serving commands (and mesh packets)
+            // as they arrive rather than at the next pass.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+            while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+                match outbound.recv_timeout(left) {
+                    Ok(cmd) => {
+                        handle_cmd(cmd, &store, &me, &mut live, &mut groups, &events);
+                        live.iter_mut().for_each(|l| persist_session(&store, l));
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+                }
+            }
         }
     });
 }
@@ -581,12 +735,18 @@ const MAX_RECEIPT_IDS: usize = 200;
 /// may just mean "not visible yet", so absence only proves delivery after this.
 const PUT_VISIBLE: std::time::Duration = std::time::Duration::from_secs(10);
 
-fn persist_ratchet(store: &Store, l: &mut Live) {
+fn persist_session(store: &Store, l: &mut Live) {
     if let Some(blob) = l.session.ratchet_update() {
         if let Err(e) = store.set_ratchet(&l.contact.bucket_in, &blob) {
             // Retry on the next pass rather than lose ratchet state.
             l.session.dirty = true;
             eprintln!("persist ratchet: {e}");
+        }
+    }
+    if let Some(blob) = l.session.outbox_update() {
+        if let Err(e) = store.set_outbox(&l.contact.bucket_in, &blob) {
+            l.session.outbox_dirty = true;
+            eprintln!("persist outbox: {e}");
         }
     }
 }
@@ -865,6 +1025,27 @@ fn handle_cmd(
             let newest = &ids[ids.len().saturating_sub(MAX_RECEIPT_IDS)..];
             if let Err(e) = l.session.send_read(newest) {
                 send_err(format!("read receipt: {e}"));
+            }
+        }
+        Cmd::Mesh(p) if p.kind == mesh::ACK => {
+            for l in live.iter_mut() {
+                let Some(key) = l.session.mesh_acked(&p.tag) else { continue };
+                if let Some(pos) = l.pending.iter().position(|(_, k, ..)| *k == key) {
+                    let (wire_id, ..) = l.pending.remove(pos);
+                    let _ = store.set_delivered(l.contact.id, &wire_id);
+                    let _ = events.send(Event::Delivered { contact_id: l.contact.id, wire_id });
+                }
+                return;
+            }
+        }
+        Cmd::Mesh(p) => {
+            let Some(l) = live.iter_mut().find(|l| l.session.mesh_tags().contains(&p.tag)) else {
+                return;
+            };
+            let Some((item, ack)) = l.session.open_mesh(&p.body) else { return };
+            MESH.send(mesh::Packet { kind: mesh::ACK, ttl: mesh::TTL, tag: ack, body: Vec::new() });
+            if let Some(item) = item {
+                handle_item(item, l, store, events);
             }
         }
         Cmd::DeleteMsg { contact_id, wire_id, everyone } => {
@@ -1345,5 +1526,48 @@ impl GroupLive {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mesh_carries_a_message_and_its_ack() {
+        // No network here: a proxy that is never dialed.
+        std::env::set_var("SANCTUM_PROXY", "socks5://127.0.0.1:9");
+        let (alice, bob) = (Identity::generate(), Identity::generate());
+        let (ra, bundle) = Ratchet::offer(&alice).unwrap();
+        let rb = Ratchet::accept(&bob, &bundle, &alice.public()).unwrap();
+        let contact = |peer: &Identity| Contact {
+            id: 0,
+            name: "x".into(),
+            bucket_in: "q-in".into(),
+            bucket_out: "q-out".into(),
+            access_key: "k".into(),
+            secret: "s".into(),
+            peer_pk: B64.encode(peer.public().as_bytes()),
+            endpoint: crate::transport::DEFAULT_ENDPOINT.into(),
+            invite_link: String::new(),
+        };
+        let mut a = ContactSession::new(&contact(&bob), &alice, Some(ra)).unwrap();
+        let mut b = ContactSession::new(&contact(&alice), &bob, Some(rb)).unwrap();
+        MESH.set_neighbors(1);
+
+        let key = b.send("W1", "hi over bluetooth").unwrap();
+        assert!(!b.is_delivered(&key).unwrap(), "waits for the ack");
+        // The outbox survives a restart.
+        let mut b2 = ContactSession::new(&contact(&alice), &bob, None).unwrap();
+        b2.restore_outbox(&b.outbox_update().unwrap());
+        assert!(!b2.is_delivered(&key).unwrap());
+
+        let p = mesh::Packet::decode(&MESH.drain().pop().unwrap()).unwrap();
+        assert!(a.mesh_tags().contains(&p.tag) && !b.mesh_tags().contains(&p.tag));
+        let (item, ack) = a.open_mesh(&p.body).unwrap();
+        assert!(matches!(item, Some(ChatItem::Message { text, .. }) if text == "hi over bluetooth"));
+        assert!(a.open_mesh(&p.body).is_none(), "replay rejected");
+        assert_eq!(b.mesh_acked(&[0; 16]), None);
+        assert_eq!(b.mesh_acked(&ack), Some(key));
     }
 }

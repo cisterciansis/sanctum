@@ -12,6 +12,7 @@ uniffi::setup_scaffolding!();
 pub mod contact;
 pub mod demo;
 pub mod invite;
+pub mod mesh;
 pub mod provision;
 pub mod store;
 #[cfg(feature = "tor")]
