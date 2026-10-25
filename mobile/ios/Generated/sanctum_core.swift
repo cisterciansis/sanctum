@@ -549,6 +549,21 @@ public protocol ClientProtocol: AnyObject, Sendable {
     func hasApiToken()  -> Bool
     
     /**
+     * Top up $20 of credits from the active TAO account.
+     */
+    func mailboxFund() 
+    
+    /**
+     * Open a mailbox account: a new one, or restore with a phrase.
+     */
+    func mailboxOpen(phrase: String?) 
+    
+    /**
+     * Answers with a TaoPhrase event. Call only on an explicit user action.
+     */
+    func mailboxReveal() 
+    
+    /**
      * The user is looking at this chat (call on open and on new messages
      * while it is on screen).
      */
@@ -756,6 +771,34 @@ open func hasApiToken() -> Bool  {
     uniffi_sanctum_core_fn_method_client_has_api_token(self.uniffiClonePointer(),$0
     )
 })
+}
+    
+    /**
+     * Top up $20 of credits from the active TAO account.
+     */
+open func mailboxFund()  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_mailbox_fund(self.uniffiClonePointer(),$0
+    )
+}
+}
+    
+    /**
+     * Open a mailbox account: a new one, or restore with a phrase.
+     */
+open func mailboxOpen(phrase: String?)  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_mailbox_open(self.uniffiClonePointer(),
+        FfiConverterOptionString.lower(phrase),$0
+    )
+}
+}
+    
+    /**
+     * Answers with a TaoPhrase event. Call only on an explicit user action.
+     */
+open func mailboxReveal()  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_mailbox_reveal(self.uniffiClonePointer(),$0
+    )
+}
 }
     
     /**
@@ -1234,6 +1277,143 @@ public func FfiConverterTypeFfiContact_lift(_ buf: RustBuffer) throws -> FfiCont
 #endif
 public func FfiConverterTypeFfiContact_lower(_ value: FfiContact) -> RustBuffer {
     return FfiConverterTypeFfiContact.lower(value)
+}
+
+
+/**
+ * The Hippius account that pays for the mailboxes this device creates.
+ */
+public struct FfiMailbox {
+    /**
+     * None when connected by a pasted API token (no phrase on device).
+     */
+    public var address: String?
+    /**
+     * "$12.34", or None while unknown.
+     */
+    public var credits: String?
+    /**
+     * Ready to start chats.
+     */
+    public var funded: Bool
+    public var deposit: String?
+    /**
+     * "0.0832 τ": what the $20 top-up costs today.
+     */
+    public var fundTao: String?
+    public var busy: Bool
+    public var note: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * None when connected by a pasted API token (no phrase on device).
+         */address: String?, 
+        /**
+         * "$12.34", or None while unknown.
+         */credits: String?, 
+        /**
+         * Ready to start chats.
+         */funded: Bool, deposit: String?, 
+        /**
+         * "0.0832 τ": what the $20 top-up costs today.
+         */fundTao: String?, busy: Bool, note: String?) {
+        self.address = address
+        self.credits = credits
+        self.funded = funded
+        self.deposit = deposit
+        self.fundTao = fundTao
+        self.busy = busy
+        self.note = note
+    }
+}
+
+#if compiler(>=6)
+extension FfiMailbox: Sendable {}
+#endif
+
+
+extension FfiMailbox: Equatable, Hashable {
+    public static func ==(lhs: FfiMailbox, rhs: FfiMailbox) -> Bool {
+        if lhs.address != rhs.address {
+            return false
+        }
+        if lhs.credits != rhs.credits {
+            return false
+        }
+        if lhs.funded != rhs.funded {
+            return false
+        }
+        if lhs.deposit != rhs.deposit {
+            return false
+        }
+        if lhs.fundTao != rhs.fundTao {
+            return false
+        }
+        if lhs.busy != rhs.busy {
+            return false
+        }
+        if lhs.note != rhs.note {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(address)
+        hasher.combine(credits)
+        hasher.combine(funded)
+        hasher.combine(deposit)
+        hasher.combine(fundTao)
+        hasher.combine(busy)
+        hasher.combine(note)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiMailbox: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiMailbox {
+        return
+            try FfiMailbox(
+                address: FfiConverterOptionString.read(from: &buf), 
+                credits: FfiConverterOptionString.read(from: &buf), 
+                funded: FfiConverterBool.read(from: &buf), 
+                deposit: FfiConverterOptionString.read(from: &buf), 
+                fundTao: FfiConverterOptionString.read(from: &buf), 
+                busy: FfiConverterBool.read(from: &buf), 
+                note: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiMailbox, into buf: inout [UInt8]) {
+        FfiConverterOptionString.write(value.address, into: &buf)
+        FfiConverterOptionString.write(value.credits, into: &buf)
+        FfiConverterBool.write(value.funded, into: &buf)
+        FfiConverterOptionString.write(value.deposit, into: &buf)
+        FfiConverterOptionString.write(value.fundTao, into: &buf)
+        FfiConverterBool.write(value.busy, into: &buf)
+        FfiConverterOptionString.write(value.note, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMailbox_lift(_ buf: RustBuffer) throws -> FfiMailbox {
+    return try FfiConverterTypeFfiMailbox.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMailbox_lower(_ value: FfiMailbox) -> RustBuffer {
+    return FfiConverterTypeFfiMailbox.lower(value)
 }
 
 
@@ -1806,13 +1986,15 @@ public struct FfiWallet {
     public var testnet: Bool
     public var active: String?
     public var accounts: [FfiTaoAccount]
+    public var mailbox: FfiMailbox?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(testnet: Bool, active: String?, accounts: [FfiTaoAccount]) {
+    public init(testnet: Bool, active: String?, accounts: [FfiTaoAccount], mailbox: FfiMailbox?) {
         self.testnet = testnet
         self.active = active
         self.accounts = accounts
+        self.mailbox = mailbox
     }
 }
 
@@ -1832,6 +2014,9 @@ extension FfiWallet: Equatable, Hashable {
         if lhs.accounts != rhs.accounts {
             return false
         }
+        if lhs.mailbox != rhs.mailbox {
+            return false
+        }
         return true
     }
 
@@ -1839,6 +2024,7 @@ extension FfiWallet: Equatable, Hashable {
         hasher.combine(testnet)
         hasher.combine(active)
         hasher.combine(accounts)
+        hasher.combine(mailbox)
     }
 }
 
@@ -1853,7 +2039,8 @@ public struct FfiConverterTypeFfiWallet: FfiConverterRustBuffer {
             try FfiWallet(
                 testnet: FfiConverterBool.read(from: &buf), 
                 active: FfiConverterOptionString.read(from: &buf), 
-                accounts: FfiConverterSequenceTypeFfiTaoAccount.read(from: &buf)
+                accounts: FfiConverterSequenceTypeFfiTaoAccount.read(from: &buf), 
+                mailbox: FfiConverterOptionTypeFfiMailbox.read(from: &buf)
         )
     }
 
@@ -1861,6 +2048,7 @@ public struct FfiConverterTypeFfiWallet: FfiConverterRustBuffer {
         FfiConverterBool.write(value.testnet, into: &buf)
         FfiConverterOptionString.write(value.active, into: &buf)
         FfiConverterSequenceTypeFfiTaoAccount.write(value.accounts, into: &buf)
+        FfiConverterOptionTypeFfiMailbox.write(value.mailbox, into: &buf)
     }
 }
 
@@ -2494,6 +2682,30 @@ fileprivate struct FfiConverterOptionData: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeFfiMailbox: FfiConverterRustBuffer {
+    typealias SwiftType = FfiMailbox?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiMailbox.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiMailbox.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeFfiPayCard: FfiConverterRustBuffer {
     typealias SwiftType = FfiPayCard?
 
@@ -2928,6 +3140,15 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_method_client_has_api_token() != 59461) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_mailbox_fund() != 61898) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_mailbox_open() != 12282) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_mailbox_reveal() != 60160) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_method_client_mark_read() != 52460) {

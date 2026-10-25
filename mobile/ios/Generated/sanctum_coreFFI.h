@@ -297,6 +297,21 @@ RustBuffer uniffi_sanctum_core_fn_method_client_get_settings(void*_Nonnull ptr, 
 int8_t uniffi_sanctum_core_fn_method_client_has_api_token(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_MAILBOX_FUND
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_MAILBOX_FUND
+void uniffi_sanctum_core_fn_method_client_mailbox_fund(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_MAILBOX_OPEN
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_MAILBOX_OPEN
+void uniffi_sanctum_core_fn_method_client_mailbox_open(void*_Nonnull ptr, RustBuffer phrase, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_MAILBOX_REVEAL
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_MAILBOX_REVEAL
+void uniffi_sanctum_core_fn_method_client_mailbox_reveal(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_MARK_READ
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_MARK_READ
 void uniffi_sanctum_core_fn_method_client_mark_read(void*_Nonnull ptr, int64_t contact_id, RustCallStatus *_Nonnull out_status
@@ -912,6 +927,24 @@ uint16_t uniffi_sanctum_core_checksum_method_client_get_settings(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_HAS_API_TOKEN
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_HAS_API_TOKEN
 uint16_t uniffi_sanctum_core_checksum_method_client_has_api_token(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_MAILBOX_FUND
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_MAILBOX_FUND
+uint16_t uniffi_sanctum_core_checksum_method_client_mailbox_fund(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_MAILBOX_OPEN
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_MAILBOX_OPEN
+uint16_t uniffi_sanctum_core_checksum_method_client_mailbox_open(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_MAILBOX_REVEAL
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_MAILBOX_REVEAL
+uint16_t uniffi_sanctum_core_checksum_method_client_mailbox_reveal(void
     
 );
 #endif
