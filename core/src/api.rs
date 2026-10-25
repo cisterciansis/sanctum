@@ -73,11 +73,28 @@ pub struct FfiTaoAccount {
     pub balance: Option<String>,
 }
 
+/// The Hippius account that pays for the mailboxes this device creates.
+#[derive(uniffi::Record, Clone)]
+pub struct FfiMailbox {
+    /// None when connected by a pasted API token (no phrase on device).
+    pub address: Option<String>,
+    /// "$12.34", or None while unknown.
+    pub credits: Option<String>,
+    /// Ready to start chats.
+    pub funded: bool,
+    pub deposit: Option<String>,
+    /// "0.0832 τ": what the $20 top-up costs today.
+    pub fund_tao: Option<String>,
+    pub busy: bool,
+    pub note: Option<String>,
+}
+
 #[derive(uniffi::Record, Clone)]
 pub struct FfiWallet {
     pub testnet: bool,
     pub active: Option<String>,
     pub accounts: Vec<FfiTaoAccount>,
+    pub mailbox: Option<FfiMailbox>,
 }
 
 impl From<WalletView> for FfiWallet {
@@ -95,6 +112,15 @@ impl From<WalletView> for FfiWallet {
                     balance: a.balance.map(tao::format_tao),
                 })
                 .collect(),
+            mailbox: w.mailbox.map(|m| FfiMailbox {
+                address: m.address,
+                credits: m.credits.map(|c| format!("${c:.2}")),
+                funded: m.credits.is_some_and(|c| c > 0.0),
+                deposit: m.deposit,
+                fund_tao: m.fund_rao.map(tao::format_tao),
+                busy: m.busy,
+                note: m.note,
+            }),
         }
     }
 }
@@ -502,6 +528,21 @@ impl Client {
     /// Answers with a TaoPhrase event. Call only on an explicit user action.
     pub fn tao_reveal(&self, address: String) {
         self.tao(TaoCmd::Reveal { address });
+    }
+
+    /// Open a mailbox account: a new one, or restore with a phrase.
+    pub fn mailbox_open(&self, phrase: Option<String>) {
+        self.tao(TaoCmd::MailboxOpen { phrase });
+    }
+
+    /// Answers with a TaoPhrase event. Call only on an explicit user action.
+    pub fn mailbox_reveal(&self) {
+        self.tao(TaoCmd::MailboxReveal);
+    }
+
+    /// Top up $20 of credits from the active TAO account.
+    pub fn mailbox_fund(&self) {
+        self.tao(TaoCmd::MailboxFund);
     }
 
     pub fn tao_set_testnet(&self, testnet: bool) {

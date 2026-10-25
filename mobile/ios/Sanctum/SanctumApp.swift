@@ -158,6 +158,8 @@ final class AppModel: ObservableObject {
         client = c
         settings = c.getSettings()
         hasToken = client.hasApiToken()
+        // Wallet and mailbox state, so New Invite knows whether we can invite.
+        c.taoRefresh()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
@@ -222,6 +224,7 @@ final class AppModel: ObservableObject {
                 }
             case .taoWallet(let w):
                 wallet = w
+                hasToken = client.hasApiToken() // set by mailbox sign-in
             case .taoPhrase(let address, let words):
                 phrase = PhraseVM(address: address, words: words.split(separator: " ").map(String.init))
             case .removed(let id, let wireId):
@@ -305,6 +308,8 @@ final class AppModel: ObservableObject {
         inviting = false
         settings = client.getSettings()
         hasToken = client.hasApiToken()
+        wallet = nil
+        client.taoRefresh()
         status = failed.map { "error: wipe incomplete: \($0)" } ?? "connecting…"
     }
 
@@ -339,6 +344,21 @@ final class AppModel: ObservableObject {
         inviting = true
         client.newInvite(name: "Contact \(chats.count + 1)")
     }
+
+    /// Starting a chat needs a funded mailbox account. True when it isn't
+    /// ready; sets one up the first time (joining never needs it).
+    func needsMailbox() -> Bool {
+        guard let w = wallet else { return false } // unknown yet: let the core decide
+        guard let m = w.mailbox else {
+            mailboxOpen()
+            return true
+        }
+        return (m.busy && m.credits == nil) || (m.credits != nil && !m.funded)
+    }
+
+    func mailboxOpen(_ phrase: String? = nil) { client.mailboxOpen(phrase: phrase) }
+    func mailboxReveal() { client.mailboxReveal() }
+    func mailboxFund() { client.mailboxFund() }
 
     // TAO wallet; payments confirm in the UI before these are called.
     func taoRefresh() { client.taoRefresh() }

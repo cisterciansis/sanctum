@@ -18,6 +18,7 @@ struct ContentView: View {
     @EnvironmentObject var model: AppModel
     @State private var showJoin = false
     @State private var showSettings = false
+    @State private var showMailbox = false
     @State private var showNewGroup = false
     @State private var renaming: ChatVM?
     @State private var renameText = ""
@@ -113,19 +114,19 @@ struct ContentView: View {
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
                         Button {
-                            if model.hasToken {
-                                model.newInvite()
+                            if model.needsMailbox() {
+                                showMailbox = true
                             } else {
-                                showSettings = true
+                                model.newInvite()
                             }
                         } label: {
                             Label("New Invite", systemImage: "person.badge.plus")
                         }
                         Button {
-                            if model.hasToken {
-                                showNewGroup = true
+                            if model.needsMailbox() {
+                                showMailbox = true
                             } else {
-                                showSettings = true
+                                showNewGroup = true
                             }
                         } label: {
                             Label("New Group", systemImage: "person.3")
@@ -174,6 +175,12 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showJoin) { JoinSheet() }
         .sheet(isPresented: $showSettings) { SettingsSheet() }
+        .sheet(isPresented: $showMailbox) {
+            NavigationStack {
+                MailboxScreen()
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showMailbox = false } } }
+            }
+        }
         .sheet(isPresented: $showNewGroup) { NewGroupSheet() }
         .preferredColorScheme(model.colorScheme)
         .alert("Rename chat", isPresented: Binding(
@@ -336,7 +343,6 @@ struct NewGroupSheet: View {
 struct SettingsSheet: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) var dismiss
-    @State private var token = ""
 
     var body: some View {
         NavigationStack {
@@ -379,10 +385,21 @@ struct SettingsSheet: View {
                 }
                 Section {
                     NavigationLink {
+                        MailboxScreen()
+                    } label: {
+                        LabeledContent {
+                            Text(model.wallet?.mailbox.map { $0.credits ?? "…" } ?? "Set Up")
+                        } label: {
+                            Label("Mailbox Account", systemImage: "tray.full")
+                        }
+                    }
+                    NavigationLink {
                         WalletScreen()
                     } label: {
                         Label { Text("TAO Wallet") } icon: { TaoSymbol() }
                     }
+                } footer: {
+                    Text("Your mailbox account pays for the chats you start. Joining someone's invite never needs one.")
                 }
                 Section {
                     Toggle("Nearby (Bluetooth)", isOn: Binding(
@@ -403,24 +420,6 @@ struct SettingsSheet: View {
                     ))
                 } footer: {
                     Text("Let people know when you've read their messages. When off, you won't see theirs either.")
-                }
-                Section {
-                    if model.hasToken {
-                        Label("Inviting enabled", systemImage: "checkmark.seal.fill")
-                            .foregroundStyle(.green)
-                    }
-                    SecureField("Hippius API token", text: $token)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                    Button(model.hasToken ? "Replace token" : "Save token") {
-                        model.saveToken(token)
-                        token = ""
-                    }
-                    .disabled(token.trimmingCharacters(in: .whitespaces).isEmpty)
-                } header: {
-                    Text("Creating invites")
-                } footer: {
-                    Text("Only inviting needs a token (console.hippius.com → Settings). Joining never does. The token stays on this device.")
                 }
                 Section {
                 } footer: {

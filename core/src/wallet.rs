@@ -217,6 +217,13 @@ pub enum TaoCmd {
     Cheque { contact_id: i64, wire_id: String, rao: u128 },
     /// Cash a cheque card in this chat.
     Cash { contact_id: i64, wire_id: String },
+    /// Open the Hippius mailbox account: a new one from a fresh phrase, or
+    /// sign in with `phrase` (restore on a new device).
+    MailboxOpen { phrase: Option<String> },
+    /// Show the mailbox account's recovery phrase (explicit user action only).
+    MailboxReveal,
+    /// Buy FUND_USD of credits with TAO from the active account (mainnet).
+    MailboxFund,
 }
 
 #[derive(Clone, Debug)]
@@ -228,11 +235,30 @@ pub struct AccountView {
     pub balance: Option<u128>,
 }
 
+/// The Hippius account that pays for the mailboxes we create.
+#[derive(Clone, Debug, Default)]
+pub struct MailboxView {
+    /// Account address when we hold its phrase; None if connected by a
+    /// pasted API token instead.
+    pub address: Option<String>,
+    /// Credits in USD; None while unknown.
+    pub credits: Option<f64>,
+    /// Where TAO becomes credits.
+    pub deposit: Option<String>,
+    /// TAO for a FUND_USD top-up at today's price (with margin).
+    pub fund_rao: Option<u128>,
+    /// Opening the account or waiting on a top-up.
+    pub busy: bool,
+    pub note: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct WalletView {
     pub net: Net,
     pub active: Option<String>,
     pub accounts: Vec<AccountView>,
+    /// None: no mailbox account yet (starting chats needs one; joining doesn't).
+    pub mailbox: Option<MailboxView>,
     /// Address the selected contact shared, if any (per contact, filled by UI asks).
     pub note: Option<String>,
 }
@@ -240,6 +266,11 @@ pub struct WalletView {
 /// Results coming back from helper threads.
 pub enum Done {
     Balances(Vec<(String, Option<u128>)>, Option<(Net, String, Snapshot)>),
+    MailboxOpened { phrase: String, address: String, token: String },
+    MailboxInfo { credits: Option<f64>, deposit: Option<String>, tao_usd: Option<f64>, last_check: bool },
+    /// A top-up left the wallet; credits follow within minutes.
+    Funded { tao: String },
+    MailboxFailed(String),
     Card { contact_id: i64, wire_id: String, card: PayCard, tell_peer: bool },
     Error(String),
 }
@@ -249,12 +280,14 @@ pub struct Jobs {
     rx: Receiver<Done>,
     /// Last known balances, by address.
     balances: Vec<(String, Option<u128>)>,
+    mailbox: MailboxView,
+    tao_usd: Option<f64>,
 }
 
 impl Jobs {
     pub fn new() -> Self {
         let (tx, rx) = channel();
-        Self { tx, rx, balances: Vec::new() }
+        Self { tx, rx, balances: Vec::new(), mailbox: MailboxView::default(), tao_usd: None }
     }
 
     fn spawn(&self, f: impl FnOnce() -> Done + Send + 'static) {
@@ -281,7 +314,56 @@ fn view(store: &Store, jobs: &Jobs) -> WalletView {
             })
             .collect(),
         note: None,
+        mailbox: (Mailbox::load(store).is_some() || has_token() || jobs.mailbox.busy).then(|| MailboxView {
+            address: Mailbox::load(store).map(|m| m.address),
+            fund_rao: jobs.tao_usd.map(fund_rao),
+            ..jobs.mailbox.clone()
+        }),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Mailbox account: the Hippius account a 12-word phrase controls. Its own
+// phrase, not a TAO wallet one, so Hippius can't tie mailboxes to the
+// addresses we pay contacts from.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize)]
+struct Mailbox {
+    phrase: String,
+    address: String,
+}
+
+const MAILBOX_KEY: &str = "hippius/account";
+
+/// Hippius's smallest TAO top-up.
+pub const FUND_USD: f64 = 20.0;
+
+impl Mailbox {
+    fn load(store: &Store) -> Option<Self> {
+        store.kv_get(MAILBOX_KEY).and_then(|s| serde_json::from_str(&s).ok())
+    }
+}
+
+fn has_token() -> bool {
+    crate::demo::Settings::load().hippius_api_token.is_some()
+}
+
+/// TAO for FUND_USD, 3% over so it still clears the minimum if the price
+/// moves before the deposit is credited.
+fn fund_rao(tao_usd: f64) -> u128 {
+    (FUND_USD * 1.03 / tao_usd * tao::RAO_PER_TAO as f64).ceil() as u128
+}
+
+fn refresh_mailbox(store: &Store, jobs: &Jobs) {
+    let account = Mailbox::load(store).map(|m| m.address);
+    let Some(p) = crate::provision::Provisioner::from_settings() else { return };
+    jobs.spawn(move || Done::MailboxInfo {
+        credits: p.credits().ok(),
+        deposit: p.deposit_address(account.as_deref()).ok(),
+        tao_usd: crate::provision::tao_usd().ok(),
+        last_check: false,
+    });
 }
 
 fn post_card(
@@ -343,7 +425,7 @@ fn card_of(store: &Store, contact_id: i64, wire_id: &str) -> Option<PayCard> {
         .and_then(|p| serde_json::from_str(&p).ok())
 }
 
-pub(crate) fn handle_cmd(cmd: TaoCmd, store: &Store, live: &mut [Live], events: &Sender<Event>, jobs: &Jobs) {
+pub(crate) fn handle_cmd(cmd: TaoCmd, store: &Store, live: &mut [Live], events: &Sender<Event>, jobs: &mut Jobs) {
     let fail = |e: String| {
         let _ = events.send(Event::Error(format!("tao: {e}")));
     };
@@ -355,6 +437,7 @@ pub(crate) fn handle_cmd(cmd: TaoCmd, store: &Store, live: &mut [Live], events: 
             let issued = w.issued.clone();
             let net = net();
             let _ = events.send(Event::TaoWallet(view(store, jobs)));
+            refresh_mailbox(store, jobs);
             jobs.spawn(move || {
                 // Our own outstanding cheques land first (either side may cash
                 // them), so later sends don't collide with their nonces.
@@ -436,6 +519,52 @@ pub(crate) fn handle_cmd(cmd: TaoCmd, store: &Store, live: &mut [Live], events: 
                 }
                 Err(e) => fail(e),
             }
+        }
+        TaoCmd::MailboxOpen { phrase } => {
+            // A new account never replaces one we have (pasted token included).
+            if jobs.mailbox.busy || (phrase.is_none() && (Mailbox::load(store).is_some() || has_token())) {
+                return;
+            }
+            jobs.mailbox = MailboxView { busy: true, note: Some("Setting up your account…".into()), ..Default::default() };
+            let _ = events.send(Event::TaoWallet(view(store, jobs)));
+            let phrase = phrase.unwrap_or_else(crate::provision::new_phrase);
+            jobs.spawn(move || {
+                let opened = crate::provision::sign_in(&phrase).and_then(|(token, address)| {
+                    let p = crate::provision::Provisioner::new(token.clone())
+                        .ok_or_else(|| crate::Error::Transport("no network agent".into()))?;
+                    p.ensure_master_token()?;
+                    Ok((token, address))
+                });
+                match opened {
+                    Ok((token, address)) => Done::MailboxOpened { phrase, address, token },
+                    Err(e) => Done::MailboxFailed(e.to_string()),
+                }
+            });
+        }
+        TaoCmd::MailboxReveal => {
+            if let Some(m) = Mailbox::load(store) {
+                let _ = events.send(Event::TaoPhrase { address: m.address, phrase: m.phrase });
+            }
+        }
+        TaoCmd::MailboxFund => {
+            let Some(from) = w.active().filter(|a| a.can_sign()).cloned() else {
+                return fail("no signing account in the TAO wallet (create or import one)".into());
+            };
+            let (Some(deposit), Some(price)) = (jobs.mailbox.deposit.clone(), jobs.tao_usd) else {
+                return fail("couldn't reach Hippius for the deposit address; try again".into());
+            };
+            if jobs.mailbox.busy {
+                return;
+            }
+            let rao = fund_rao(price);
+            jobs.mailbox.busy = true;
+            jobs.mailbox.note = Some(format!("Sending {}…", tao::format_tao(rao)));
+            let _ = events.send(Event::TaoWallet(view(store, jobs)));
+            // Hippius credits mainnet TAO, whatever network the wallet shows.
+            jobs.spawn(move || match tao::send(Net::Main, &from, &deposit, rao) {
+                Ok(_) => Done::Funded { tao: tao::format_tao(rao) },
+                Err(e) => Done::MailboxFailed(tao::reason(&e)),
+            });
         }
         TaoCmd::Pay { contact_id, wire_id, rao, to, re } => {
             let Some(from) = w.active().filter(|a| a.can_sign()).cloned() else {
@@ -742,6 +871,57 @@ pub(crate) fn drain(store: &Store, live: &mut [Live], events: &Sender<Event>, jo
                     }
                 }
             }
+            Done::MailboxOpened { phrase, address, token } => {
+                let m = Mailbox { phrase, address };
+                if let Ok(j) = serde_json::to_string(&m) {
+                    let _ = store.kv_set(MAILBOX_KEY, &j);
+                }
+                let mut s = crate::demo::Settings::load();
+                s.hippius_api_token = Some(token);
+                s.save();
+                jobs.mailbox = MailboxView::default();
+                let _ = events.send(Event::TaoWallet(view(store, jobs)));
+                refresh_mailbox(store, jobs);
+            }
+            Done::MailboxInfo { credits, deposit, tao_usd, last_check } => {
+                // A top-up we're waiting on has landed once credits rise.
+                let landed = matches!((jobs.mailbox.credits, credits), (Some(a), Some(b)) if b > a);
+                if landed && jobs.mailbox.note.is_some() {
+                    jobs.mailbox.busy = false;
+                    jobs.mailbox.note = None;
+                } else if last_check {
+                    jobs.mailbox.busy = false;
+                    jobs.mailbox.note = Some("Credits haven't shown up yet. Deposits can take a while; check back soon.".into());
+                }
+                jobs.mailbox.credits = credits.or(jobs.mailbox.credits);
+                jobs.mailbox.deposit = deposit.or(jobs.mailbox.deposit.take());
+                jobs.tao_usd = tao_usd.or(jobs.tao_usd);
+                let _ = events.send(Event::TaoWallet(view(store, jobs)));
+            }
+            Done::Funded { tao } => {
+                jobs.mailbox.note = Some(format!("Sent {tao}. Credits usually arrive within a few minutes."));
+                let _ = events.send(Event::TaoWallet(view(store, jobs)));
+                // Watch for the credits for up to ~10 minutes.
+                let Some(p) = crate::provision::Provisioner::from_settings() else { continue };
+                let before = jobs.mailbox.credits.unwrap_or(0.0);
+                jobs.spawn(move || {
+                    let mut credits = None;
+                    for _ in 0..20 {
+                        std::thread::sleep(std::time::Duration::from_secs(30));
+                        credits = p.credits().ok();
+                        if credits.is_some_and(|c| c > before) {
+                            break;
+                        }
+                    }
+                    Done::MailboxInfo { credits, deposit: None, tao_usd: None, last_check: true }
+                });
+            }
+            Done::MailboxFailed(e) => {
+                jobs.mailbox.busy = false;
+                jobs.mailbox.note = None;
+                let _ = events.send(Event::TaoWallet(view(store, jobs)));
+                let _ = events.send(Event::Error(format!("mailbox: {e}")));
+            }
             Done::Error(e) => {
                 let _ = events.send(Event::Error(format!("tao: {e}")));
             }
@@ -751,6 +931,13 @@ pub(crate) fn drain(store: &Store, live: &mut [Live], events: &Sender<Event>, jo
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fund_amount_clears_the_minimum() {
+        // $20 + 3% at $250/TAO = 0.0824 TAO.
+        assert_eq!(super::fund_rao(250.0), 82_400_000);
+        assert!(super::fund_rao(247.99) as f64 / 1e9 * 247.99 >= super::FUND_USD);
+    }
+
     use super::*;
 
     fn card() -> PayCard {

@@ -144,6 +144,14 @@ const TAO_COMMANDS: &[(&str, &str)] = &[
     ("/tao cash", "cash their newest cheque"),
 ];
 
+/// Mailbox account commands, shown in the wallet (Ctrl-W).
+const MAILBOX_COMMANDS: &[(&str, &str)] = &[
+    ("/mailbox new", "set up the account (Ctrl-N does it for you)"),
+    ("/mailbox fund", "add $20 of credits from your TAO wallet (asks /yes)"),
+    ("/mailbox restore <words>", "use your account on this device"),
+    ("/mailbox phrase", "show its recovery phrase"),
+];
+
 /// The resting status line.
 const IDLE: &str = "end-to-end encrypted · hippius";
 
@@ -157,6 +165,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("Ctrl-U", "unsend your last undelivered message"),
     ("Ctrl-S", "settings and this list"),
     ("Ctrl-W or /tao", "TAO wallet: accounts, balances"),
+    ("/mailbox", "mailbox account: credits for the chats you start"),
     ("Esc", "quit"),
     ("/file <path>", "send a file (up to 25 MB)"),
     ("Ctrl-O or /open", "open the newest attachment (photos, PDFs, media)"),
@@ -320,6 +329,8 @@ impl App {
         let (out_tx, out_rx) = std::sync::mpsc::channel();
         let (ev_tx, ev_rx) = std::sync::mpsc::channel();
         spawn_worker(out_rx, ev_tx);
+        // Wallet and mailbox state, so Ctrl-N knows whether we can invite.
+        let _ = out_tx.send(Cmd::Tao(TaoCmd::Refresh));
         // `sanctum-tui <invite-link>`: join straight from the command line.
         if let Some(link) = std::env::args().nth(1) {
             if link.starts_with("sanctum://v2/") {
@@ -503,11 +514,20 @@ impl App {
         if text == "/yes" {
             match self.pending_tao.take() {
                 Some(cmd) => {
+                    self.status = match cmd {
+                        TaoCmd::MailboxFund => "sending; Ctrl-W shows when the credits arrive".into(),
+                        TaoCmd::MailboxOpen { .. } => "signing in…".into(),
+                        _ => "on its way; the card in the chat tracks it".into(),
+                    };
                     let _ = self.outbound.send(Cmd::Tao(cmd));
-                    self.status = "on its way; the card in the chat tracks it".into();
                 }
                 None => self.status = "nothing to confirm".into(),
             }
+            self.input.clear();
+            return;
+        }
+        if let Some(rest) = text.strip_prefix("/mailbox") {
+            self.mailbox_cmd(rest.trim());
             self.input.clear();
             return;
         }
@@ -530,7 +550,7 @@ impl App {
             let mut it = rest.splitn(2, ' ');
             let size: i64 = it.next().and_then(|x| x.parse().ok()).unwrap_or(3);
             let name = it.next().unwrap_or("Group").trim().to_string();
-            if !self.inviting {
+            if !self.inviting && self.mailbox_ready() {
                 self.inviting = true;
                 let _ = self.outbound.send(Cmd::NewGroup { name, size });
             }
@@ -683,6 +703,74 @@ impl App {
     fn confirm(&mut self, prompt: String, cmd: TaoCmd) {
         self.status = format!("confirm: {prompt} on {} · /yes to send", self.net_label());
         self.pending_tao = Some(cmd);
+    }
+
+    /// Starting a chat needs a funded mailbox account. Sets one up the first
+    /// time (joining never needs it) and says what's missing.
+    fn mailbox_ready(&mut self) -> bool {
+        // Unknown yet: let the worker decide.
+        let Some(w) = &self.wallet else { return true };
+        let blocked = match &w.mailbox {
+            None => {
+                self.tao(TaoCmd::MailboxOpen { phrase: None });
+                "setting up your mailbox account: it pays for the chats you start (joining is free)"
+            }
+            Some(m) if m.busy && m.credits.is_none() => "your mailbox account is still being set up…",
+            Some(m) if m.credits.is_some_and(|c| c <= 0.0) => {
+                "add $20 of credits first: /mailbox fund, or send TAO to the deposit address below"
+            }
+            Some(_) => return true,
+        };
+        self.status = blocked.into();
+        self.show_wallet = true;
+        false
+    }
+
+    fn mailbox_cmd(&mut self, args: &str) {
+        let (verb, rest) = args.split_once(' ').unwrap_or((args, ""));
+        let mailbox = self.wallet.as_ref().and_then(|w| w.mailbox.clone());
+        self.show_wallet = true;
+        match verb {
+            "" | "refresh" => self.tao(TaoCmd::Refresh),
+            "new" if mailbox.is_some() => self.status = "you already have a mailbox account".into(),
+            "new" => self.tao(TaoCmd::MailboxOpen { phrase: None }),
+            "restore" if rest.split_whitespace().count() < 12 => {
+                self.status = "usage: /mailbox restore <12 words>".into()
+            }
+            "restore" => {
+                let cmd = TaoCmd::MailboxOpen { phrase: Some(rest.trim().into()) };
+                if mailbox.is_some() {
+                    self.status = "confirm: switch this device to that account? Back up the current phrase first (/mailbox phrase) · /yes".into();
+                    self.pending_tao = Some(cmd);
+                } else {
+                    self.tao(cmd);
+                }
+            }
+            "phrase" if mailbox.as_ref().is_some_and(|m| m.address.is_some()) => self.tao(TaoCmd::MailboxReveal),
+            "phrase" => self.status = "no mailbox phrase on this device".into(),
+            "fund" => match mailbox.as_ref().and_then(|m| m.fund_rao.map(|r| (r, m.deposit.clone()))) {
+                Some((rao, Some(_))) => {
+                    let payer = self.wallet.as_ref().and_then(|w| {
+                        w.accounts.iter().find(|a| w.active.as_deref() == Some(a.address.as_str()) && !a.watch_only)
+                    });
+                    let Some(from) = payer.map(|a| a.address.clone()) else {
+                        self.status = "no TAO account to pay from: /tao new or /tao import, or send TAO to the deposit address from any wallet".into();
+                        return;
+                    };
+                    self.status = format!(
+                        "confirm: send {} (~$20) from {from} to your Hippius deposit address on MAINNET? Final · /yes",
+                        taolib::format_tao(rao)
+                    );
+                    self.pending_tao = Some(TaoCmd::MailboxFund);
+                }
+                _ if mailbox.is_none() => self.status = "no mailbox account yet: /mailbox new".into(),
+                _ => {
+                    self.status = "fetching the deposit address and TAO price; try again in a moment".into();
+                    self.tao(TaoCmd::Refresh);
+                }
+            },
+            _ => self.status = "usage: /mailbox [new | fund | restore <words> | phrase]".into(),
+        }
     }
 
     /// Wallet commands that need no chat. Returns false for chat commands.
@@ -1208,16 +1296,51 @@ impl App {
         f.render_stateful_widget(StatefulImage::default(), Rect { x, ..fit }, state);
     }
 
+    /// Mailbox account: what pays for the chats you start.
+    fn mailbox_rows(&self, dim: Style) -> Vec<Line<'static>> {
+        let label = |k: &str| Span::styled(format!("  {k:<9}"), dim);
+        let mut rows = vec![Line::from(vec![
+            Span::raw("  ✉ Mailbox account").bold(),
+            Span::styled("  ·  pays for the chats you start; joining is free", dim),
+        ])];
+        let Some(m) = self.wallet.as_ref().and_then(|w| w.mailbox.as_ref()) else {
+            rows.push(Line::raw("  None yet. Ctrl-N sets one up; /mailbox restore <words> brings yours here."));
+            rows.push(Line::raw(""));
+            return rows;
+        };
+        let account = m.address.clone().unwrap_or_else(|| "connected with an API token".into());
+        rows.push(Line::from(vec![label("Account"), Span::raw(account)]));
+        let credits = match m.credits {
+            None if m.busy => Span::styled("…", dim),
+            None => Span::styled("unknown (r to refresh)", dim),
+            Some(c) if c > 0.0 => Span::styled(format!("${c:.2} · ready to start chats"), Style::default().fg(Color::Green)),
+            Some(c) => Span::styled(format!("${c:.2} · add $20 to start chats"), Style::default().fg(Color::Yellow)),
+        };
+        rows.push(Line::from(vec![label("Credits"), credits]));
+        if let Some(d) = &m.deposit {
+            rows.push(Line::from(vec![label("Deposit"), Span::raw(d.clone())]));
+            let cost = m.fund_rao.map(|r| format!(" ($20 ≈ {})", taolib::format_tao(r))).unwrap_or_default();
+            rows.push(Line::from(vec![
+                label(""),
+                Span::styled(format!("send at least $20 of TAO here{cost}, never to the account address"), dim),
+            ]));
+        }
+        if let Some(n) = &m.note {
+            rows.push(Line::from(vec![label(""), Span::styled(n.clone(), Style::default().fg(Color::Cyan))]));
+        }
+        rows.push(Line::raw(""));
+        rows
+    }
+
     fn draw_wallet(&self, f: &mut Frame, body: Rect) {
         let dim = Style::default().fg(Color::DarkGray);
-        let mut rows = vec![
-            Line::raw(""),
-            Line::from(vec![
-                Span::raw("  τ TAO wallet").bold(),
-                Span::styled(format!("  ·  {}  ·  r refresh · esc close", self.net_label()), dim),
-            ]),
-            Line::raw(""),
-        ];
+        let mut rows = vec![Line::raw("")];
+        rows.extend(self.mailbox_rows(dim));
+        rows.push(Line::from(vec![
+            Span::raw("  τ TAO wallet").bold(),
+            Span::styled(format!("  ·  {}  ·  r refresh · esc close", self.net_label()), dim),
+        ]));
+        rows.push(Line::raw(""));
         match &self.wallet {
             Some(w) if !w.accounts.is_empty() => {
                 for (i, a) in w.accounts.iter().enumerate() {
@@ -1238,15 +1361,17 @@ impl App {
             _ => rows.push(Line::raw("  No accounts yet. /tao new creates one; /tao import <words> restores.")),
         }
         if let Some((addr, phrase)) = &self.phrase {
+            let mailbox = self.wallet.as_ref().and_then(|w| w.mailbox.as_ref()).and_then(|m| m.address.as_deref());
+            let what = if mailbox == Some(addr.as_str()) { "your mailbox account and its credits" } else { "the funds" };
             rows.push(Line::raw(""));
             rows.push(Line::from(Span::styled(
-                format!("  Recovery phrase for {addr}: anyone with it controls the funds"),
+                format!("  Recovery phrase for {addr}: anyone with it controls {what}"),
                 Style::default().fg(Color::Yellow),
             )));
             rows.push(Line::raw(format!("  {phrase}")));
         }
         rows.push(Line::raw(""));
-        for (cmd, what) in TAO_COMMANDS {
+        for (cmd, what) in MAILBOX_COMMANDS.iter().chain(TAO_COMMANDS) {
             rows.push(Line::from(vec![Span::raw(format!("  {cmd:<26}")), Span::styled(*what, dim)]));
         }
         f.render_widget(Paragraph::new(rows).wrap(Wrap { trim: false }), body);
@@ -1401,7 +1526,7 @@ impl App {
                             }
                         }
                         (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
-                            if !self.inviting {
+                            if !self.inviting && self.mailbox_ready() {
                                 self.inviting = true;
                                 let n = self.chats.len();
                                 let _ = self

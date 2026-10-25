@@ -364,6 +364,8 @@ struct ChatApp {
     /// TAO: amount for chat payments, phrase/address for adding accounts.
     tao_amount: Entity<InputState>,
     tao_key: Entity<InputState>,
+    /// Recovery phrase or API token for an existing mailbox account.
+    mailbox_key: Entity<InputState>,
     wallet: Option<WalletView>,
     phrase: Option<(String, String)>,
     /// A money action shown for confirmation before it's sent.
@@ -381,6 +383,8 @@ impl ChatApp {
         let (out_tx, out_rx) = std::sync::mpsc::channel();
         let (ev_tx, ev_rx) = std::sync::mpsc::channel();
         spawn_worker(out_rx, ev_tx);
+        // Wallet and mailbox state, so New Invite knows whether we can invite.
+        let _ = out_tx.send(Cmd::Tao(TaoCmd::Refresh));
 
         let settings = Settings::load();
         let mode = if settings.theme == "dark" { ThemeMode::Dark } else { ThemeMode::Light };
@@ -394,6 +398,8 @@ impl ChatApp {
         let timer_state = cx.new(|cx| InputState::new(window, cx).placeholder("90m, 2w, 6mo"));
         let tao_amount = cx.new(|cx| InputState::new(window, cx).placeholder("1.5"));
         let tao_key = cx.new(|cx| InputState::new(window, cx).placeholder("recovery phrase or address"));
+        let mailbox_key =
+            cx.new(|cx| InputState::new(window, cx).placeholder("recovery phrase or Hippius API token"));
         let mut _subscriptions = vec![cx.subscribe_in(&input_state, window, {
             move |this: &mut Self, _, ev: &InputEvent, window, cx| {
                 match ev {
@@ -452,6 +458,7 @@ impl ChatApp {
             timer_state,
             tao_amount,
             tao_key,
+            mailbox_key,
             wallet: None,
             phrase: None,
             pending_tao: None,
@@ -626,6 +633,8 @@ impl ChatApp {
         let (out_tx, out_rx) = std::sync::mpsc::channel();
         let (ev_tx, ev_rx) = std::sync::mpsc::channel();
         spawn_worker(out_rx, ev_tx);
+        let _ = out_tx.send(Cmd::Tao(TaoCmd::Refresh));
+        self.wallet = None;
         self.outbound = out_tx;
         self.events = ev_rx;
         self.chats.clear();
@@ -774,7 +783,8 @@ impl ChatApp {
                     },
                 ))),
         );
-        if let Some((addr, phrase)) = self.phrase.clone() {
+        let mailbox = w.as_ref().and_then(|w| w.mailbox.as_ref()).and_then(|m| m.address.clone());
+        if let Some((addr, phrase)) = self.phrase.clone().filter(|(a, _)| Some(a) != mailbox.as_ref()) {
             col = col.child(
                 v_flex()
                     .gap_1()
@@ -847,12 +857,159 @@ impl ChatApp {
         col
     }
 
+    /// Settings → Mailbox account: credits, deposit address, top-up, phrase.
+    fn mailbox_rows(&mut self, p: &Pal, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let row = |label: &str, hint: Option<String>| {
+            let mut l = v_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_0p5()
+                .child(div().text_sm().text_color(rgb(p.text)).child(label.to_string()));
+            if let Some(h) = hint {
+                l = l.child(div().text_xs().text_color(rgb(p.sub)).child(h));
+            }
+            h_flex().w_full().items_center().gap_3().child(l)
+        };
+        let w = self.wallet.clone();
+        let Some(m) = w.as_ref().and_then(|w| w.mailbox.clone()) else {
+            return vec![
+                row(
+                    "Set up your mailbox account",
+                    Some("Pays for the chats you start. Joining someone's invite never needs one.".into()),
+                )
+                .child(Button::new("mb-new").primary().label("Set Up").on_click(cx.listener(|this, _, _, cx| {
+                    this.tao(TaoCmd::MailboxOpen { phrase: None });
+                    cx.notify();
+                })))
+                .into_any_element(),
+                v_flex()
+                    .w_full()
+                    .gap_2()
+                    .child(div().text_xs().text_color(rgb(p.sub)).child("Already have one? Paste its recovery phrase, or a Hippius API token."))
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .gap_2()
+                            .child(div().flex_1().child(Input::new(&self.mailbox_key)))
+                            .child(Button::new("mb-connect").outline().label("Connect").on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    let key = this.mailbox_key.read(cx).value().trim().to_string();
+                                    if key.split_whitespace().count() >= 12 {
+                                        this.tao(TaoCmd::MailboxOpen { phrase: Some(key) });
+                                    } else if !key.is_empty() && key.bytes().all(|b| b.is_ascii_alphanumeric()) {
+                                        this.settings.hippius_api_token = Some(key);
+                                        this.settings.save();
+                                        this.tao(TaoCmd::Refresh);
+                                    } else {
+                                        this.status = "error: that's neither a 12-word phrase nor an API token".into();
+                                    }
+                                    this.mailbox_key.update(cx, |s, cx| s.set_value("", window, cx));
+                                    cx.notify();
+                                },
+                            ))),
+                    )
+                    .into_any_element(),
+            ];
+        };
+        if m.busy && m.credits.is_none() {
+            return vec![row("Setting up your account…", m.note.clone())
+                .child(div().text_sm().text_color(rgb(p.sub)).child("…"))
+                .into_any_element()];
+        }
+        let funded = m.credits.is_some_and(|c| c > 0.0);
+        let credits = m.credits.map(|c| format!("${c:.2}")).unwrap_or_else(|| "…".into());
+        let mut rows = vec![row(
+            "Credits",
+            Some(if funded { "Ready to start chats".into() } else { "Add at least $20 of TAO to start chats".into() }),
+        )
+        .child(
+            div()
+                .text_lg()
+                .font_semibold()
+                .text_color(rgb(if funded { 0x30D158 } else { 0xFF9F0A }))
+                .child(credits),
+        )
+        .child(Button::new("mb-refresh").ghost().label("Refresh").on_click(cx.listener(|this, _, _, _| {
+            this.tao(TaoCmd::Refresh)
+        })))
+        .into_any_element()];
+        if let Some(n) = m.note.clone() {
+            rows.push(div().text_sm().text_color(rgb(self.settings.accent)).child(n).into_any_element());
+        }
+        let payer = w.as_ref().and_then(|w| {
+            w.accounts.iter().find(|a| w.active.as_deref() == Some(a.address.as_str()) && !a.watch_only)
+        });
+        if let (Some(rao), Some(a), Some(_)) = (m.fund_rao, payer, &m.deposit) {
+            let prompt = format!(
+                "Send {} (~$20) from {} to your Hippius deposit address on mainnet? TAO transfers are final.",
+                tao::format_tao(rao),
+                a.name
+            );
+            rows.push(
+                row("Add $20 from TAO wallet", Some(format!("{} from {}", tao::format_tao(rao), a.name)))
+                    .child(Button::new("mb-fund").primary().label("Add $20").disabled(m.busy).on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            this.pending_tao = Some((prompt.clone(), TaoCmd::MailboxFund));
+                            cx.notify();
+                        },
+                    )))
+                    .into_any_element(),
+            );
+            if let Some((prompt, TaoCmd::MailboxFund)) = &self.pending_tao {
+                rows.push(self.confirm_row(prompt.clone(), cx).into_any_element());
+            }
+        }
+        if let Some(d) = m.deposit.clone() {
+            let copy = d.clone();
+            rows.push(
+                v_flex()
+                    .w_full()
+                    .gap_1p5()
+                    .child(
+                        row("Deposit address", Some("Or send at least $20 of TAO here from any wallet. Never to the account address.".into()))
+                            .child(Button::new("mb-copy").ghost().label("Copy").on_click(cx.listener(move |this, _, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
+                                this.status = "Deposit address copied".into();
+                                cx.notify();
+                            }))),
+                    )
+                    .child(div().text_sm().font_family("Menlo").text_color(rgb(p.text)).child(d))
+                    .into_any_element(),
+            );
+        }
+        match (&m.address, self.phrase.clone()) {
+            (Some(addr), Some((a, phrase))) if *addr == a => rows.push(
+                v_flex()
+                    .gap_1()
+                    .child(div().text_xs().text_color(rgb(0xFF9F0A)).child(
+                        "Recovery phrase: anyone with it controls your mailbox account and its credits",
+                    ))
+                    .child(div().text_sm().font_family("Menlo").text_color(rgb(p.text)).child(phrase))
+                    .child(Button::new("mb-hide").outline().label("Hide").on_click(cx.listener(|this, _, _, cx| {
+                        this.phrase = None;
+                        cx.notify();
+                    })))
+                    .into_any_element(),
+            ),
+            (Some(addr), _) => rows.push(
+                row("Recovery phrase", Some(format!("Account {addr} · back it up: a wipe erases it from this device")))
+                    .child(Button::new("mb-phrase").outline().label("Show").on_click(cx.listener(|this, _, _, _| {
+                        this.tao(TaoCmd::MailboxReveal)
+                    })))
+                    .into_any_element(),
+            ),
+            (None, _) => rows.push(row("Connected with an API token", None).into_any_element()),
+        }
+        rows
+    }
+
     /// "Are you sure?" for anything that moves money.
     fn confirm_row(&mut self, prompt: String, cx: &mut Context<Self>) -> Div {
         h_flex()
+            .w_full()
             .gap_2()
             .items_center()
-            .child(div().text_sm().text_color(rgb(0xFF9F0A)).child(prompt))
+            .child(div().flex_1().min_w_0().text_sm().text_color(rgb(0xFF9F0A)).child(prompt))
             .child(Button::new("tao-confirm").primary().label("Confirm").on_click(cx.listener(
                 |this, _, _, cx| {
                     if let Some((_, cmd)) = this.pending_tao.take() {
@@ -922,9 +1079,31 @@ impl ChatApp {
         cx.notify();
     }
 
+    /// Starting a chat needs a funded mailbox account. Sets one up the first
+    /// time (joining never needs it) and opens Settings to show what's missing.
+    fn mailbox_ready(&mut self) -> bool {
+        // Unknown yet: let the worker decide.
+        let Some(w) = &self.wallet else { return true };
+        let why = match &w.mailbox {
+            None => {
+                self.tao(TaoCmd::MailboxOpen { phrase: None });
+                "Setting up your mailbox account. It pays for the chats you start; joining is free."
+            }
+            Some(m) if m.busy && m.credits.is_none() => "Your mailbox account is still being set up…",
+            Some(m) if m.credits.is_some_and(|c| c <= 0.0) => "Add $20 of credits to start chats.",
+            Some(_) => return true,
+        };
+        self.status = why.into();
+        self.show_settings = true;
+        false
+    }
+
     fn new_invite(&mut self, cx: &mut Context<Self>) {
         if self.inviting {
             return; // minting takes a few seconds; one at a time
+        }
+        if !self.mailbox_ready() {
+            return cx.notify();
         }
         self.inviting = true;
         let n = self.chats.len();
@@ -1041,7 +1220,7 @@ impl ChatApp {
                 .child(menu_item("pm-group", "New Group…", p.text, accent).on_click(cx.listener(
                     |this, _, _, cx| {
                         this.menu = None;
-                        this.show_group = true;
+                        this.show_group = this.mailbox_ready();
                         cx.notify();
                     },
                 )))
@@ -1504,7 +1683,9 @@ impl Render for ChatApp {
                     cx.notify();
                 }));
 
+            let mailbox = self.mailbox_rows(&p, cx);
             pane(vec![
+                section(&p, "Mailbox account", mailbox),
                 section(&p, "Appearance", vec![
                     row("Theme", None).child(theme).into_any_element(),
                     row("Accent", None).child(swatches).into_any_element(),

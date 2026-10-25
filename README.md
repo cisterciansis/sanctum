@@ -22,7 +22,8 @@ down.
 - **You decide what stays.** Disappearing messages (1 min to 1 year),
   delete for everyone, opt-in reciprocal read receipts.
 - **Open and checked.** AGPL-3.0; protocol laws machine-checked in Bend.
-- **Next:** wallet-keypair credentials for storage, no API token at all.
+- **No sign-up.** Your mailbox account is a 12-word phrase made on your
+  device and funded with TAO: no email, phone number or OAuth.
 
 ## Install
 
@@ -42,9 +43,11 @@ curl -fsSL https://raw.githubusercontent.com/cisterciansis/sanctum/master/instal
   `/file <path>` attach · `/name <name>` rename · `Ctrl-R` react · `Ctrl-U`
   unsend · `Ctrl-S` settings
 - `sanctum-desktop` — GUI (build from source)
-- Inviting people needs a [Hippius](https://console.hippius.com) API token in
-  `~/.sanctum/settings.json` (`"hippius_api_token": "..."`). Joining needs
-  nothing.
+- Starting chats needs a mailbox account: the first `Ctrl-N` sets one up
+  from a fresh recovery phrase, then add $20 of TAO (`/mailbox fund` from the
+  built-in wallet, or any wallet to the deposit address in `Ctrl-W`). Joining
+  needs nothing. A [Hippius](https://console.hippius.com) API token in
+  `~/.sanctum/settings.json` (`"hippius_api_token": "..."`) still works.
 
 ## Build
 

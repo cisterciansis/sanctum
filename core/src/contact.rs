@@ -802,7 +802,7 @@ pub fn spawn_worker(
                 match outbound.recv_timeout(left) {
                     Ok(cmd) => {
                         match cmd {
-                            Cmd::Tao(t) => crate::wallet::handle_cmd(t, &store, &mut live, &events, &jobs),
+                            Cmd::Tao(t) => crate::wallet::handle_cmd(t, &store, &mut live, &events, &mut jobs),
                             cmd => handle_cmd(cmd, &store, &me, &mut live, &mut groups, &events, &jobs),
                         }
                         live.iter_mut().for_each(|l| persist_session(&store, l));
@@ -922,9 +922,7 @@ fn handle_cmd(
     match cmd {
         Cmd::NewInvite { name } => {
             let Some(p) = Provisioner::from_settings() else {
-                return send_err(
-                    "inviting needs a hippius_api_token in ~/.sanctum/settings.json".into(),
-                );
+                return send_err("starting a chat needs a mailbox account: Settings → Mailbox".into());
             };
             match create_invite(&p, me, &name) {
                 Ok((mut contact, _link, session)) => match store.add_contact(&contact) {
@@ -940,9 +938,7 @@ fn handle_cmd(
         }
         Cmd::NewGroup { name, size } => {
             let Some(p) = Provisioner::from_settings() else {
-                return send_err(
-                    "creating a group needs a hippius_api_token in settings".into(),
-                );
+                return send_err("creating a group needs a mailbox account: Settings → Mailbox".into());
             };
             match create_group(&p, me, &name, size) {
                 Ok((mut group, _links)) => match store.add_group(&group) {

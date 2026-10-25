@@ -50,7 +50,7 @@ keyring = { version = "3", features = ["apple-native"] }
 # TAO (Bittensor) wallet: Substrate client without its websocket transport;
 # chain RPC goes over our own HTTP agent so Tor/proxy settings cover it.
 subxt = { version = "0.51", default-features = false, features = ["native", "runtime"] }
-subxt-signer = { version = "0.51", default-features = false, features = ["sr25519", "subxt", "std"] }
+subxt-signer = { version = "0.51", default-features = false, features = ["sr25519", "unstable-eth", "subxt", "std"] }
 arti-client = { version = "0.47", optional = true, default-features = false, features = ["tokio", "native-tls", "compression"] }
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 # Pin only: sysinfo 0.38 (via arti's tor-memquota) fails to build for iOS
