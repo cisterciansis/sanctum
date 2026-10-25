@@ -143,6 +143,33 @@ extension FfiTaoAccount: Identifiable {
     public var id: String { address }
 }
 
+/// A contact's (or your) shared address as a scannable QR.
+struct AddressQRSheet: View {
+    @Environment(\.dismiss) var dismiss
+    let address: String
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                QRCode(text: address)
+                    .frame(width: 240, height: 240)
+                    .padding(16)
+                    .background(RoundedRectangle(cornerRadius: 20).fill(.white))
+                let mid = address.index(address.startIndex, offsetBy: address.count / 2)
+                Text("\(address[..<mid])\n\(address[mid...])")
+                    .font(.callout.monospaced())
+                    .multilineTextAlignment(.center)
+                Spacer()
+            }
+            .padding(.top, 24)
+            .navigationTitle("TAO Address")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        .presentationDetents([.medium, .large])
+    }
+}
+
 struct PhraseVM: Identifiable {
     let address: String
     let words: [String]
@@ -277,6 +304,8 @@ struct PayCardView: View {
     let mine: Bool
     let card: FfiPayCard
     @State private var confirmPay = false
+    @State private var showQR = false
+    @State private var payThem = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -286,32 +315,18 @@ struct PayCardView: View {
                 if card.testnet { Text("testnet").font(.caption2).foregroundStyle(.secondary) }
             }
             .foregroundStyle(.secondary)
-            Text(card.amount).font(.title2.weight(.semibold)).monospacedDigit()
-            if let memo = card.memo { Text(memo).font(.callout) }
-            Label(statusText, systemImage: statusIcon)
-                .font(.caption)
-                .foregroundStyle(statusColor)
-            if let tx = card.tx {
-                Text(tx.prefix(10) + "…" + tx.suffix(6))
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-            if !mine && card.kind == "request" && card.status == "open" {
-                Button("Pay \(card.amount)") { confirmPay = true }
-                    .buttonStyle(.borderedProminent)
-            }
-            if !mine && card.kind == "cheque" && (card.status == "pending" || card.status == "bounced") {
-                Button(card.status == "bounced" ? "Try Cashing Again" : "Cash Cheque") {
-                    model.taoCash(chatId, wireId: wireId)
-                }
-                .buttonStyle(.borderedProminent)
+            if card.kind == "address" {
+                addressBody
+            } else {
+                amountBody
             }
         }
         .padding(12)
         .frame(minWidth: 180, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 18).fill(Color(.secondarySystemBackground)))
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.accentColor.opacity(0.35)))
+        .sheet(isPresented: $showQR) { AddressQRSheet(address: card.to) }
+        .sheet(isPresented: $payThem) { TaoSheet(chatId: chatId, action: .send) }
         .alert("Pay \(card.amount)?", isPresented: $confirmPay) {
             Button("Pay", role: .destructive) {
                 _ = model.taoPay(chatId, amount: card.amount, to: card.to, re: wireId)
@@ -322,10 +337,58 @@ struct PayCardView: View {
         }
     }
 
+    /// A shared address: in two clean lines (no hyphenation), with actions.
+    @ViewBuilder
+    private var addressBody: some View {
+        let mid = card.to.index(card.to.startIndex, offsetBy: card.to.count / 2)
+        Text("\(card.to[..<mid])\n\(card.to[mid...])")
+            .font(.callout.monospaced())
+            .fixedSize(horizontal: false, vertical: true)
+        HStack(spacing: 8) {
+            Button {
+                UIPasteboard.general.string = card.to
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+            Button { showQR = true } label: { Label("QR", systemImage: "qrcode") }
+            if !mine {
+                Button { payThem = true } label: { Label("Pay", systemImage: "arrow.up.circle") }
+            }
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+    }
+
+    @ViewBuilder
+    private var amountBody: some View {
+        Text(card.amount).font(.title2.weight(.semibold)).monospacedDigit()
+        if let memo = card.memo { Text(memo).font(.callout) }
+        Label(statusText, systemImage: statusIcon)
+            .font(.caption)
+            .foregroundStyle(statusColor)
+        if let tx = card.tx {
+            Text(tx.prefix(10) + "…" + tx.suffix(6))
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+        if !mine && card.kind == "request" && card.status == "open" {
+            Button("Pay \(card.amount)") { confirmPay = true }
+                .buttonStyle(.borderedProminent)
+        }
+        if !mine && card.kind == "cheque" && (card.status == "pending" || card.status == "bounced") {
+            Button(card.status == "bounced" ? "Try Cashing Again" : "Cash Cheque") {
+                model.taoCash(chatId, wireId: wireId)
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
+
     private var title: String {
         switch card.kind {
         case "request": mine ? "You requested" : "Request"
         case "cheque": "Cheque"
+        case "address": mine ? "Your TAO address" : "TAO address"
         default: mine ? "You paid" : "Payment"
         }
     }

@@ -6,6 +6,14 @@ import VisionKit
 
 let tapbacks = ["👍", "👎", "❤️", "‼️", "❓", "😂"]
 
+/// An emoji drawn into an image, for menus that only take images.
+func emojiImage(_ emoji: String) -> UIImage {
+    let text = emoji as NSString
+    let attrs: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 26)]
+    let size = text.size(withAttributes: attrs)
+    return UIGraphicsImageRenderer(size: size).image { _ in text.draw(at: .zero, withAttributes: attrs) }
+}
+
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
     @State private var showJoin = false
@@ -1140,14 +1148,17 @@ struct Bubble: View {
                     .contextMenu {
                         Text(msg.ts.formatted(date: .abbreviated, time: .shortened))
                         if !msg.mine {
+                            // One horizontal row of all six, like iMessage's tapbacks.
                             ControlGroup {
-                                ForEach(tapbacks.prefix(4), id: \.self) { emoji in
-                                    Button(emoji) { model.react(chatId, msg, emoji) }
+                                ForEach(tapbacks, id: \.self) { emoji in
+                                    Button { model.react(chatId, msg, emoji) } label: {
+                                        // A palette only draws images; plain emoji text comes out as "?".
+                                        Image(uiImage: emojiImage(emoji)).renderingMode(.original)
+                                    }
+                                    .accessibilityLabel(emoji)
                                 }
                             }
-                            ForEach(tapbacks.suffix(2), id: \.self) { emoji in
-                                Button(emoji) { model.react(chatId, msg, emoji) }
-                            }
+                            .controlGroupStyle(.palette)
                         }
                         Button {
                             UIPasteboard.general.string = msg.text

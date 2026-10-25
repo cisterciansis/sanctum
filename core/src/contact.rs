@@ -396,9 +396,10 @@ impl ContactSession {
         Ok(())
     }
 
-    /// Send a control message (payments) over this chat's session.
-    pub(crate) fn send_control(&mut self, body: &serde_json::Value) -> Result<(), String> {
-        self.deposit(body).map(|_| ())
+    /// Send a control message (payments) over this chat's session; returns
+    /// its object key, for delivery tracking.
+    pub(crate) fn send_control(&mut self, body: &serde_json::Value) -> Result<String, String> {
+        self.deposit(body)
     }
 
     /// Tell the peer we read these of their messages.
@@ -596,6 +597,14 @@ pub enum Event {
     /// Authoritative reload of one chat's history (after a clear).
     History { contact_id: i64, msgs: Vec<StoredMsg> },
     Error(String),
+}
+
+impl Live {
+    /// Mark `wire_id` delivered once the peer picks up the object at `key`
+    /// (wallet messages ride the same receipts as chat messages).
+    pub(crate) fn track(&mut self, wire_id: &str, key: String) {
+        self.pending.push((wire_id.to_string(), key, false, std::time::Instant::now()));
+    }
 }
 
 pub(crate) struct Live {

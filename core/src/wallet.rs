@@ -79,6 +79,8 @@ pub enum PayKind {
     Paid,
     Request,
     Cheque,
+    /// A shared TAO address (from a `taoaddr` message; `to` holds it).
+    Address,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -152,6 +154,7 @@ impl PayCard {
         let memo = self.memo.as_deref().map(|m| format!(" · {m}")).unwrap_or_default();
         let why = self.note.as_deref().map(|n| format!(": {n}")).unwrap_or_default();
         let s = match (self.kind, self.status) {
+            (PayKind::Address, _) => format!("TAO address: {}", self.to),
             (PayKind::Paid, PayStatus::Sending) => format!("Sending {amt}…"),
             (PayKind::Paid, PayStatus::Sent) => format!("Sent {amt}"),
             (PayKind::Paid, PayStatus::Verifying) => format!("{amt} received · verifying on chain…"),
@@ -305,6 +308,24 @@ fn post_card(
     let _ = events.send(Event::Received { contact_id, msg });
 }
 
+/// The card for a shared TAO address (no amount; `to` is the address).
+fn address_card(net: Net, address: &str) -> PayCard {
+    PayCard {
+        kind: PayKind::Address,
+        status: PayStatus::Open,
+        net,
+        rao: "0".into(),
+        from: String::new(),
+        to: address.into(),
+        tx: None,
+        block: None,
+        cheque: None,
+        memo: None,
+        re: None,
+        note: None,
+    }
+}
+
 fn update_card(store: &Store, events: &Sender<Event>, contact_id: i64, wire_id: &str, card: &PayCard) {
     let text = card.summary();
     let pay = serde_json::to_string(card).ok();
@@ -406,8 +427,14 @@ pub(crate) fn handle_cmd(cmd: TaoCmd, store: &Store, live: &mut [Live], events: 
         TaoCmd::Share { contact_id } => {
             let Some(addr) = w.active.clone() else { return fail("no wallet yet".into()) };
             let Some(l) = live.iter_mut().find(|l| l.contact.id == contact_id) else { return };
-            if let Err(e) = l.session.send_control(&serde_json::json!({ "t": "taoaddr", "a": addr })) {
-                fail(e);
+            match l.session.send_control(&serde_json::json!({ "t": "taoaddr", "a": addr })) {
+                // Both sides of the chat should show it, not just theirs.
+                Ok(key) => {
+                    let wire_id = ulid::Ulid::new().to_string();
+                    post_card(store, events, contact_id, &wire_id, true, &address_card(net(), &addr));
+                    l.track(&wire_id, key);
+                }
+                Err(e) => fail(e),
             }
         }
         TaoCmd::Pay { contact_id, wire_id, rao, to, re } => {
@@ -555,7 +582,10 @@ pub(crate) fn handle_cmd(cmd: TaoCmd, store: &Store, live: &mut [Live], events: 
 fn send_card(store: &Store, live: &mut [Live], events: &Sender<Event>, contact_id: i64, wire_id: &str, card: &PayCard) {
     let Some(l) = live.iter_mut().find(|l| l.contact.id == contact_id) else { return };
     match l.session.send_control(&serde_json::json!({ "t": "pay", "id": wire_id, "card": card })) {
-        Ok(()) => post_card(store, events, contact_id, wire_id, true, card),
+        Ok(key) => {
+            post_card(store, events, contact_id, wire_id, true, card);
+            l.track(wire_id, key);
+        }
         Err(e) => {
             let _ = events.send(Event::SendFailed { contact_id, wire_id: wire_id.into(), error: e });
         }
@@ -571,26 +601,15 @@ pub(crate) fn handle_item(v: serde_json::Value, l: &mut Live, store: &Store, eve
             if let Ok(acc) = tao::parse_address(a) {
                 let a = tao::address_of(&acc);
                 let _ = store.kv_set(&peer_key(l), &a);
-                let msg = StoredMsg {
-                    wire_id: ulid::Ulid::new().to_string(),
-                    mine: false,
-                    text: format!("τ Shared their TAO address: {a}"),
-                    file_path: None,
-                    ts_ms: crate::store::chrono_now_ms(),
-                    delivered: false,
-                    reaction: None,
-                    sender_seat: None,
-                    read_ms: None,
-                    pay: None,
-                };
-                let _ = store.add_msg(cid, &msg);
-                let _ = events.send(Event::Received { contact_id: cid, msg });
+                let wire_id = ulid::Ulid::new().to_string();
+                post_card(store, events, cid, &wire_id, false, &address_card(net(), &a));
             }
         }
         Some("pay") => {
             let Some(id) = v.get("id").and_then(|x| x.as_str()).filter(|x| x.len() <= 64) else { return };
             let Ok(mut card) = serde_json::from_value::<PayCard>(v["card"].clone()) else { return };
-            if card.validate().is_err() {
+            // Address cards only come from `taoaddr`, never as a peer's card.
+            if card.kind == PayKind::Address || card.validate().is_err() {
                 return;
             }
             let id = id.to_string();
@@ -616,6 +635,7 @@ pub(crate) fn handle_item(v: serde_json::Value, l: &mut Live, store: &Store, eve
                     let my = Wallet::load(store).accounts.into_iter().map(|a| a.address).collect::<Vec<_>>();
                     jobs.spawn(move || check_cheque(cid, id, card, my));
                 }
+                PayKind::Address => {} // refused above
             }
         }
         _ => {}
@@ -673,7 +693,7 @@ fn settle_update(store: &Store, jobs: &Jobs, cid: i64, id: String, theirs: PayCa
             ours.status = match ours.kind {
                 PayKind::Cheque => PayStatus::Cashed,
                 PayKind::Request => PayStatus::Settled,
-                PayKind::Paid => ours.status,
+                PayKind::Paid | PayKind::Address => ours.status,
             };
             ours.tx = Some(tx);
             ours.block = Some(block);
@@ -703,9 +723,12 @@ pub(crate) fn drain(store: &Store, live: &mut [Live], events: &Sender<Event>, jo
                 update_card(store, events, contact_id, &wire_id, &card);
                 if tell_peer {
                     if let Some(l) = live.iter_mut().find(|l| l.contact.id == contact_id) {
-                        let _ = l.session.send_control(&serde_json::json!({
+                        let sent = l.session.send_control(&serde_json::json!({
                             "t": "pay", "id": wire_id, "card": card,
                         }));
+                        if let Ok(key) = sent {
+                            l.track(&wire_id, key);
+                        }
                     }
                 }
                 // A landed payment settles the request it answers: ours once

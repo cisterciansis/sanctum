@@ -1836,7 +1836,19 @@ impl Render for ChatApp {
                     bubble.bg(rgb(p.bubble)).text_color(rgb(p.bubble_text))
                 };
 
-                let content: AnyElement = if let Some(card) = &m.tao {
+                let content: AnyElement = if let Some(card) = m.tao.as_ref().filter(|c| c.kind == TaoKind::Address) {
+                    let addr = card.to.clone();
+                    v_flex()
+                        .gap_1()
+                        .child(div().text_xs().child(if m.mine { "τ YOUR TAO ADDRESS" } else { "τ TAO ADDRESS" }))
+                        .child(div().text_sm().font_family("Menlo").child(card.to.clone()))
+                        .child(Button::new(("tao-addr-copy", i)).ghost().label("Copy address").on_click(
+                            cx.listener(move |_, _, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(addr.clone()))
+                            }),
+                        ))
+                        .into_any_element()
+                } else if let Some(card) = &m.tao {
                     let mut c = v_flex()
                         .gap_1()
                         .child(div().text_xs().child(match (card.kind, m.mine) {
@@ -1845,6 +1857,7 @@ impl Render for ChatApp {
                             (TaoKind::Cheque, _) => "τ CHEQUE",
                             (TaoKind::Paid, true) => "τ YOU PAID",
                             (TaoKind::Paid, false) => "τ PAYMENT",
+                            (TaoKind::Address, _) => "τ TAO ADDRESS", // handled above
                         }))
                         .child(div().text_xl().font_semibold().child(tao::format_tao(card.amount())))
                         .child(div().text_xs().child(m.text.clone()));
