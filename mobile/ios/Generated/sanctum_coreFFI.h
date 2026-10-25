@@ -347,9 +347,24 @@ RustBuffer uniffi_sanctum_core_fn_method_client_send_file(void*_Nonnull ptr, int
 void uniffi_sanctum_core_fn_method_client_set_api_token(void*_Nonnull ptr, RustBuffer token, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_SET_BLOCKED
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_SET_BLOCKED
+void uniffi_sanctum_core_fn_method_client_set_blocked(void*_Nonnull ptr, int64_t contact_id, int8_t on, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_SET_FAVORITE
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_SET_FAVORITE
+void uniffi_sanctum_core_fn_method_client_set_favorite(void*_Nonnull ptr, int64_t contact_id, int8_t on, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_SET_TIMER
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_SET_TIMER
 void uniffi_sanctum_core_fn_method_client_set_timer(void*_Nonnull ptr, int64_t contact_id, uint64_t secs, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_SET_VERIFIED
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_SET_VERIFIED
+void uniffi_sanctum_core_fn_method_client_set_verified(void*_Nonnull ptr, int64_t contact_id, int8_t on, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_SNAPSHOT_MESSAGES
@@ -360,6 +375,17 @@ RustBuffer uniffi_sanctum_core_fn_method_client_snapshot_messages(void*_Nonnull 
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_UNSEND
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_UNSEND
 void uniffi_sanctum_core_fn_method_client_unsend(void*_Nonnull ptr, int64_t contact_id, RustBuffer wire_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_WIPE
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_WIPE
+RustBuffer uniffi_sanctum_core_fn_method_client_wipe(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_CASHU_BEARER_WARNING
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_CASHU_BEARER_WARNING
+RustBuffer uniffi_sanctum_core_fn_func_cashu_bearer_warning(RustCallStatus *_Nonnull out_status
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_DISAPPEAR_LABEL
@@ -376,6 +402,16 @@ RustBuffer uniffi_sanctum_core_fn_func_disappear_presets(RustCallStatus *_Nonnul
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_PARSE_DISAPPEAR
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_PARSE_DISAPPEAR
 RustBuffer uniffi_sanctum_core_fn_func_parse_disappear(RustBuffer input, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_PAY_SCAN
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_PAY_SCAN
+RustBuffer uniffi_sanctum_core_fn_func_pay_scan(RustBuffer text, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_PAY_TOKEN
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_PAY_TOKEN
+RustBuffer uniffi_sanctum_core_fn_func_pay_token(RustBuffer input, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_TOR_STATUS
@@ -664,6 +700,12 @@ void ffi_sanctum_core_rust_future_free_void(uint64_t handle
 void ffi_sanctum_core_rust_future_complete_void(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_CASHU_BEARER_WARNING
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_CASHU_BEARER_WARNING
+uint16_t uniffi_sanctum_core_checksum_func_cashu_bearer_warning(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_DISAPPEAR_LABEL
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_DISAPPEAR_LABEL
 uint16_t uniffi_sanctum_core_checksum_func_disappear_label(void
@@ -679,6 +721,18 @@ uint16_t uniffi_sanctum_core_checksum_func_disappear_presets(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_PARSE_DISAPPEAR
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_PARSE_DISAPPEAR
 uint16_t uniffi_sanctum_core_checksum_func_parse_disappear(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_PAY_SCAN
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_PAY_SCAN
+uint16_t uniffi_sanctum_core_checksum_func_pay_scan(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_PAY_TOKEN
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_PAY_TOKEN
+uint16_t uniffi_sanctum_core_checksum_func_pay_token(void
     
 );
 #endif
@@ -784,9 +838,27 @@ uint16_t uniffi_sanctum_core_checksum_method_client_set_api_token(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_SET_BLOCKED
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_SET_BLOCKED
+uint16_t uniffi_sanctum_core_checksum_method_client_set_blocked(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_SET_FAVORITE
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_SET_FAVORITE
+uint16_t uniffi_sanctum_core_checksum_method_client_set_favorite(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_SET_TIMER
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_SET_TIMER
 uint16_t uniffi_sanctum_core_checksum_method_client_set_timer(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_SET_VERIFIED
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_SET_VERIFIED
+uint16_t uniffi_sanctum_core_checksum_method_client_set_verified(void
     
 );
 #endif
@@ -799,6 +871,12 @@ uint16_t uniffi_sanctum_core_checksum_method_client_snapshot_messages(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_UNSEND
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_UNSEND
 uint16_t uniffi_sanctum_core_checksum_method_client_unsend(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_WIPE
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_WIPE
+uint16_t uniffi_sanctum_core_checksum_method_client_wipe(void
     
 );
 #endif

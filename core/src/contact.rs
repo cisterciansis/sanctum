@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::crypto_box::PublicKey;
 use crate::provision::Provisioner;
-use crate::store::{Contact, Store, StoredMsg};
+use crate::store::{Contact, Mark, Store, StoredMsg};
 use crate::transport::Mailbox;
 use crate::{open, seal, Identity, Ratchet};
 
@@ -89,6 +89,7 @@ pub fn create_invite(
         peer_pk: String::new(), // until their hello lands
         endpoint: crate::transport::DEFAULT_ENDPOINT.into(),
         invite_link: link.clone(),
+        ..Default::default()
     };
     let (ratchet, bundle) = Ratchet::offer(me).map_err(|e| e.to_string())?;
     let session = ContactSession::new(&contact, me, Some(ratchet))?;
@@ -114,6 +115,7 @@ pub fn accept_invite(
         peer_pk: inv.pk.clone(),
         endpoint: inv.e.clone(),
         invite_link: String::new(),
+        ..Default::default()
     };
     let mut session = ContactSession::new(&contact, me, None)?;
     if inv.v >= 2 {
@@ -153,6 +155,8 @@ pub enum ChatItem {
     Delete { ref_id: String },
     /// The peer read these of our messages.
     Read { refs: Vec<String> },
+    /// Something arrived sealed under another identity key; it was refused.
+    KeyChanged,
 }
 
 impl ContactSession {
@@ -301,6 +305,11 @@ impl ContactSession {
         Ok(path)
     }
 
+    /// Drop an attachment blob unread (blocked sender).
+    pub fn discard(&self, att_key: &str) {
+        let _ = self.mbox_in.delete(att_key);
+    }
+
     pub fn is_delivered(&self, key: &str) -> Result<bool, String> {
         Ok(!self.mbox_out.exists(key).map_err(|e| e.to_string())?)
     }
@@ -316,7 +325,23 @@ impl ContactSession {
         let Ok(keys) = self.mbox_in.list("m/") else { return out };
         for key in keys {
             let Ok(raw) = self.mbox_in.get(&key) else { continue };
-            let Ok((from, pt)) = self.unseal(&raw) else { continue };
+            let (from, pt) = match self.unseal(&raw) {
+                Ok(opened) => opened,
+                Err(e) if e == crate::KEY_CHANGED => {
+                    out.push(ChatItem::KeyChanged);
+                    let _ = self.mbox_in.delete(&key);
+                    continue;
+                }
+                Err(_) => continue,
+            };
+            // The peer's key is pinned once known: anything sealed under
+            // another identity is refused, never adopted. (Sanctum keys never
+            // legitimately change: a reinstall is a new contact.)
+            if self.peer_pk.as_ref().is_some_and(|pk| pk.as_bytes() != from.as_bytes()) {
+                out.push(ChatItem::KeyChanged);
+                let _ = self.mbox_in.delete(&key);
+                continue;
+            }
             let txt = String::from_utf8_lossy(&pt);
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
                 let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string();
@@ -386,6 +411,8 @@ pub enum Cmd {
     /// Clear local history: all of it, or only messages older than
     /// `older_than_secs`.
     ClearHistory { contact_id: i64, older_than_secs: Option<u64> },
+    /// Set or clear a local mark on a direct chat (verified, blocked, …).
+    Mark { contact_id: i64, mark: Mark, on: bool },
 }
 
 pub enum Event {
@@ -420,11 +447,38 @@ struct Live {
     pending: Vec<(String, String, bool, std::time::Instant)>,
 }
 
+/// One worker at a time: after a wipe the next one waits here until the
+/// stale one has noticed and let go of the old database.
+static ONE_WORKER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Emergency wipe (bitchat's triple-tap): retire the running worker, then
+/// delete every local trace. Never touches the network, so it is instant;
+/// spawn a fresh worker afterwards to start over as on first launch.
+pub fn wipe() -> Result<(), String> {
+    crate::bump_epoch();
+    crate::store::wipe().map_err(|e| e.to_string())
+}
+
+/// The contact with its safety number (empty until their key is known).
+fn with_safety(mut c: Contact, me: &Identity) -> Contact {
+    let peer = B64.decode(&c.peer_pk).ok().and_then(|b| <[u8; 32]>::try_from(b).ok());
+    c.safety = peer
+        .and_then(|b| crate::safety_number(&me.public(), &PublicKey::from_bytes(b)))
+        .unwrap_or_default();
+    c
+}
+
 pub fn spawn_worker(
     outbound: std::sync::mpsc::Receiver<Cmd>,
     events: std::sync::mpsc::Sender<Event>,
 ) {
+    let epoch = crate::epoch();
     std::thread::spawn(move || {
+        let _one = ONE_WORKER.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        crate::set_born(epoch);
+        if crate::stale() {
+            return;
+        }
         let err = |e: String| Event::Error(e);
         let store = match Store::open() {
             Ok(s) => s,
@@ -445,6 +499,7 @@ pub fn spawn_worker(
         let mut groups: Vec<GroupLive> = Vec::new();
         let mut snapshot = Vec::new();
         for c in store.contacts().unwrap_or_default() {
+            let c = with_safety(c, &me);
             let msgs = store.messages(c.id).unwrap_or_default();
             // Own messages still in flight at the last exit.
             let in_flight: Vec<String> =
@@ -482,14 +537,21 @@ pub fn spawn_worker(
         let _ = events.send(Event::Snapshot(snapshot));
 
         loop {
+            // A wipe retires this worker; stop before touching anything.
+            if crate::stale() {
+                return;
+            }
             while let Ok(cmd) = outbound.try_recv() {
                 handle_cmd(cmd, &store, &me, &mut live, &mut groups, &events);
             }
             live.iter_mut().for_each(|l| persist_ratchet(&store, l));
 
             for l in &mut live {
+                if crate::stale() {
+                    return;
+                }
                 for item in l.session.poll() {
-                    handle_item(item, l, &store, &events);
+                    handle_item(item, l, &store, &me, &events);
                 }
                 persist_ratchet(&store, l);
                 let cid = l.contact.id;
@@ -511,6 +573,9 @@ pub fn spawn_worker(
             }
 
             for gl in &mut groups {
+                if crate::stale() {
+                    return;
+                }
                 let gid = -gl.group.id;
                 let items = gl.poll();
                 for item in items {
@@ -623,6 +688,7 @@ fn group_as_contact(g: &crate::store::Group) -> Contact {
         peer_pk: if g.members.len() > 1 { "joined".into() } else { String::new() },
         endpoint: g.endpoint.clone(),
         invite_link: open_seat_links(g),
+        ..Default::default()
     }
 }
 
@@ -739,9 +805,9 @@ fn handle_cmd(
             send_err("You've already joined with this invite".into())
         }
         Cmd::AcceptInvite { link, name } => match accept_invite(&link, me, &name) {
-            Ok((mut contact, session)) => match store.add_contact(&contact) {
+            Ok((contact, session)) => match store.add_contact(&contact) {
                 Ok(id) => {
-                    contact.id = id;
+                    let contact = with_safety(Contact { id, ..contact }, me);
                     live.push(Live { contact: contact.clone(), session, pending: Vec::new() });
                     let _ = events.send(Event::ContactAdded(contact));
                 }
@@ -866,6 +932,26 @@ fn handle_cmd(
             if let Err(e) = l.session.send_read(newest) {
                 send_err(format!("read receipt: {e}"));
             }
+        }
+        Cmd::Mark { contact_id, mark, on } => {
+            let Some(l) = live.iter_mut().find(|l| l.contact.id == contact_id) else { return };
+            if let Err(e) = store.set_mark(contact_id, mark, on) {
+                return send_err(e.to_string());
+            }
+            let c = &mut l.contact;
+            match mark {
+                Mark::Verified => c.verified = on,
+                Mark::Blocked => c.blocked = on,
+                Mark::Favorite => c.favorite = on,
+                Mark::KeyChanged => c.key_changed = on,
+            }
+            // Same pairing as Store::set_mark.
+            match (mark, on) {
+                (Mark::Verified, true) => c.key_changed = false,
+                (Mark::KeyChanged, true) => c.verified = false,
+                _ => {}
+            }
+            let _ = events.send(Event::ContactUpdated(c.clone()));
         }
         Cmd::DeleteMsg { contact_id, wire_id, everyone } => {
             let Some((mine, _)) = store.msg_meta(contact_id, &wire_id) else { return };
@@ -998,14 +1084,40 @@ fn handle_group_cmd(
     }
 }
 
-fn handle_item(item: ChatItem, l: &mut Live, store: &Store, events: &std::sync::mpsc::Sender<Event>) {
+fn handle_item(
+    item: ChatItem,
+    l: &mut Live,
+    store: &Store,
+    me: &Identity,
+    events: &std::sync::mpsc::Sender<Event>,
+) {
     let cid = l.contact.id;
+    // Blocked: everything they send is drained unseen (so the block doesn't
+    // show as "never delivered"), attachment blobs included.
+    if l.contact.blocked {
+        match &item {
+            ChatItem::Hello { .. } | ChatItem::KeyChanged => {}
+            ChatItem::Attachment { att_key, .. } => return l.session.discard(att_key),
+            _ => return,
+        }
+    }
     match item {
         ChatItem::Hello { pk } => {
             if l.session.set_peer_pk(&pk).is_ok() {
                 let _ = store.set_peer_pk(cid, &pk);
                 l.contact.peer_pk = pk;
+                l.contact.invite_link.clear();
+                l.contact = with_safety(l.contact.clone(), me);
                 let _ = events.send(Event::PeerJoined { contact_id: cid });
+                let _ = events.send(Event::ContactUpdated(l.contact.clone()));
+            }
+        }
+        ChatItem::KeyChanged => {
+            if !l.contact.key_changed {
+                let _ = store.set_mark(cid, Mark::KeyChanged, true);
+                l.contact.key_changed = true;
+                l.contact.verified = false;
+                let _ = events.send(Event::ContactUpdated(l.contact.clone()));
             }
         }
         ChatItem::Message { id, text } => {
@@ -1345,5 +1457,21 @@ impl GroupLive {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_wipe_retires_running_workers() {
+        let epoch = crate::epoch();
+        let worker = std::thread::spawn(move || {
+            crate::set_born(epoch);
+            let before = crate::data_dir().is_some();
+            crate::bump_epoch(); // what wipe() does first
+            (before, crate::stale(), crate::data_dir())
+        });
+        assert_eq!(worker.join().unwrap(), (true, true, None));
+        assert!(!crate::stale() && crate::data_dir().is_some(), "UI threads are unaffected");
     }
 }

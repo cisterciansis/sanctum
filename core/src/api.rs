@@ -7,7 +7,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Mutex;
 
 use crate::contact::{spawn_worker, Cmd, Event};
-use crate::store::StoredMsg;
+use crate::store::{Contact, Mark, StoredMsg};
 
 
 
@@ -48,6 +48,30 @@ pub struct FfiContact {
     pub name: String,
     pub waiting: bool,
     pub invite_link: String,
+    pub verified: bool,
+    pub blocked: bool,
+    pub favorite: bool,
+    /// Someone wrote under a different identity key (refused); cleared by
+    /// verifying again.
+    pub key_changed: bool,
+    /// "12345 67890 …" (12 groups of 5); empty until the peer joins.
+    pub safety: String,
+}
+
+impl From<Contact> for FfiContact {
+    fn from(c: Contact) -> Self {
+        Self {
+            id: c.id,
+            waiting: c.peer_pk.is_empty(),
+            name: c.name,
+            invite_link: c.invite_link,
+            verified: c.verified,
+            blocked: c.blocked,
+            favorite: c.favorite,
+            key_changed: c.key_changed,
+            safety: c.safety,
+        }
+    }
 }
 
 #[derive(uniffi::Enum)]
@@ -104,6 +128,25 @@ pub fn disappear_label(secs: u64) -> String {
     crate::demo::disappear_label(secs)
 }
 
+/// A message's payment chips (Cashu, lightning:, bitcoin:, BOLT11) and its
+/// text with long payment strings shortened.
+#[uniffi::export]
+pub fn pay_scan(text: String) -> crate::pay::Payments {
+    crate::pay::scan(&text)
+}
+
+/// `/pay <token>`: the bare Cashu token to send, or None if it isn't a
+/// cleanly decoding token with a positive amount.
+#[uniffi::export]
+pub fn pay_token(input: String) -> Option<String> {
+    crate::pay::pay_token(&input).ok().map(|(token, _)| token)
+}
+
+#[uniffi::export]
+pub fn cashu_bearer_warning() -> String {
+    crate::pay::BEARER_WARNING.into()
+}
+
 #[derive(uniffi::Record)]
 pub struct FfiTorStatus {
     pub ready: bool,
@@ -145,32 +188,13 @@ impl Client {
                     let mut chats = Vec::new();
                     for (c, msgs) in all {
                         hist.insert(c.id, msgs.into_iter().map(Into::into).collect());
-                        chats.push(FfiContact {
-                            id: c.id,
-                            name: c.name,
-                            waiting: c.peer_pk.is_empty(),
-                            invite_link: c.invite_link,
-                        });
+                        chats.push(c.into());
                     }
                     FfiEvent::Snapshot { chats }
                 }
-                Event::ContactAdded(c) => FfiEvent::ContactAdded {
-                    contact: FfiContact {
-                        id: c.id,
-                        name: c.name,
-                        waiting: c.peer_pk.is_empty(),
-                        invite_link: c.invite_link,
-                    },
-                },
+                Event::ContactAdded(c) => FfiEvent::ContactAdded { contact: c.into() },
                 Event::ContactRemoved { contact_id } => FfiEvent::ContactRemoved { contact_id },
-                Event::ContactUpdated(c) => FfiEvent::ContactUpdated {
-                    contact: FfiContact {
-                        id: c.id,
-                        name: c.name,
-                        waiting: c.peer_pk.is_empty(),
-                        invite_link: c.invite_link,
-                    },
-                },
+                Event::ContactUpdated(c) => FfiEvent::ContactUpdated { contact: c.into() },
                 Event::PeerJoined { contact_id } => FfiEvent::PeerJoined { contact_id },
                 Event::Received { contact_id, msg } => {
                     FfiEvent::Received { contact_id, msg: msg.into() }
@@ -335,12 +359,44 @@ impl Client {
             .send(Cmd::DeleteMsg { contact_id, wire_id, everyone });
     }
 
+    pub fn set_verified(&self, contact_id: i64, on: bool) {
+        self.mark(contact_id, Mark::Verified, on);
+    }
+
+    pub fn set_blocked(&self, contact_id: i64, on: bool) {
+        self.mark(contact_id, Mark::Blocked, on);
+    }
+
+    pub fn set_favorite(&self, contact_id: i64, on: bool) {
+        self.mark(contact_id, Mark::Favorite, on);
+    }
+
+    /// Emergency wipe: delete all local data and start over as on first
+    /// launch (a fresh worker, a fresh identity). Instant and offline.
+    /// Returns what couldn't be deleted, if anything.
+    pub fn wipe(&self) -> Option<String> {
+        let result = crate::contact::wipe();
+        let (out_tx, out_rx) = std::sync::mpsc::channel();
+        let (ev_tx, ev_rx) = std::sync::mpsc::channel();
+        spawn_worker(out_rx, ev_tx);
+        *self.outbound.lock().expect("outbound lock") = out_tx;
+        *self.events.lock().expect("events lock") = ev_rx;
+        self.history.lock().expect("history lock").clear();
+        result.err()
+    }
+
     pub fn unsend(&self, contact_id: i64, wire_id: String) {
         let _ = self
             .outbound
             .lock()
             .expect("outbound lock")
             .send(Cmd::Unsend { contact_id, wire_id });
+    }
+}
+
+impl Client {
+    fn mark(&self, contact_id: i64, mark: Mark, on: bool) {
+        let _ = self.outbound.lock().expect("outbound lock").send(Cmd::Mark { contact_id, mark, on });
     }
 }
 

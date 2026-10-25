@@ -21,6 +21,7 @@ fn main() {
             peer_pk: String::new(),
             endpoint: "https://s3.hippius.com".into(),
             invite_link: "sanctum://v2/test".into(),
+            ..Default::default()
         })
         .expect("add contact");
     store

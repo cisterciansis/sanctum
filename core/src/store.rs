@@ -47,7 +47,7 @@ fn keychain_secret(name: &str) -> Result<String, Error> {
 
 
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Contact {
     pub id: i64,
     pub name: String,
@@ -62,6 +62,38 @@ pub struct Contact {
     pub endpoint: String,
     /// Pending invite link (shown until the peer joins), else empty.
     pub invite_link: String,
+    /// Local-only marks (see `Mark`).
+    pub verified: bool,
+    pub blocked: bool,
+    pub favorite: bool,
+    pub key_changed: bool,
+    /// Safety number (`crate::safety_number`); filled in by the worker,
+    /// empty until the peer's key is known. Not stored.
+    pub safety: String,
+}
+
+/// Per-contact flags kept on this device only.
+#[derive(Clone, Copy, Debug)]
+pub enum Mark {
+    /// The safety number was checked in person.
+    Verified,
+    /// Their messages are dropped unseen.
+    Blocked,
+    /// Listed first.
+    Favorite,
+    /// Someone wrote under a different identity key (refused).
+    KeyChanged,
+}
+
+impl Mark {
+    fn column(self) -> &'static str {
+        match self {
+            Mark::Verified => "verified",
+            Mark::Blocked => "blocked",
+            Mark::Favorite => "favorite",
+            Mark::KeyChanged => "key_changed",
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -149,6 +181,10 @@ impl Store {
         // Additive migration for pre-group databases; harmless when present.
         let _ = conn.execute("ALTER TABLE messages ADD COLUMN sender_seat INTEGER", []);
         let _ = conn.execute("ALTER TABLE messages ADD COLUMN read_ms INTEGER", []);
+        for mark in [Mark::Verified, Mark::Blocked, Mark::Favorite, Mark::KeyChanged] {
+            let sql = format!("ALTER TABLE contacts ADD COLUMN {} INTEGER NOT NULL DEFAULT 0", mark.column());
+            let _ = conn.execute(&sql, []);
+        }
         Ok(Self { conn })
     }
 
@@ -238,10 +274,25 @@ impl Store {
         Ok(())
     }
 
+    /// Set a mark. Verifying settles a key-change warning; a key change
+    /// voids verification.
+    pub fn set_mark(&self, contact_id: i64, mark: Mark, on: bool) -> Result<(), Error> {
+        let also = match (mark, on) {
+            (Mark::Verified, true) => ", key_changed = 0",
+            (Mark::KeyChanged, true) => ", verified = 0",
+            _ => "",
+        };
+        let sql = format!("UPDATE contacts SET {} = ?1{also} WHERE id = ?2", mark.column());
+        self.conn
+            .execute(&sql, rusqlite::params![on, contact_id])
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+        Ok(())
+    }
+
     pub fn contacts(&self) -> Result<Vec<Contact>, Error> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, name, bucket_in, bucket_out, access_key, secret, peer_pk, endpoint, invite_link FROM contacts ORDER BY id")
+            .prepare("SELECT id, name, bucket_in, bucket_out, access_key, secret, peer_pk, endpoint, invite_link, verified, blocked, favorite, key_changed FROM contacts ORDER BY id")
             .map_err(|e| Error::Crypto(e.to_string()))?;
         let rows = stmt
             .query_map([], |r| {
@@ -255,6 +306,11 @@ impl Store {
                     peer_pk: r.get(6)?,
                     endpoint: r.get(7)?,
                     invite_link: r.get(8)?,
+                    verified: r.get(9)?,
+                    blocked: r.get(10)?,
+                    favorite: r.get(11)?,
+                    key_changed: r.get(12)?,
+                    safety: String::new(),
                 })
             })
             .map_err(|e| Error::Crypto(e.to_string()))?;
@@ -509,6 +565,34 @@ impl Store {
             .map_err(|e| Error::Crypto(e.to_string()))?;
         Ok(())
     }
+}
+
+/// Emergency wipe: the DB key leaves the keychain (crypto-shredding the
+/// SQLCipher file even where flash keeps old blocks), then everything under
+/// data_dir() goes: database, settings, dev key file, received files.
+/// Ratchet state and the identity live in the database. Local only.
+pub fn wipe() -> Result<(), Error> {
+    let mut first_err = None;
+    for name in ["db-key", "identity"] {
+        let deleted = keychain(name).and_then(|e| match e.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(Error::Crypto(e.to_string())),
+        });
+        if let Err(e) = deleted {
+            first_err = first_err.or(Some(e));
+        }
+    }
+    if let Some(dir) = crate::data_dir() {
+        // The retiring worker may drop a journal file in mid-delete: retry.
+        let gone = (0..3).any(|_| match std::fs::remove_dir_all(&dir) {
+            Ok(()) => true,
+            Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+        });
+        if !gone {
+            first_err = first_err.or(Some(Error::Crypto(format!("could not delete {dir}"))));
+        }
+    }
+    first_err.map_or(Ok(()), Err)
 }
 
 pub fn chrono_now_ms() -> i64 {

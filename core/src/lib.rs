@@ -12,6 +12,7 @@ uniffi::setup_scaffolding!();
 pub mod contact;
 pub mod demo;
 pub mod invite;
+pub mod pay;
 pub mod provision;
 pub mod store;
 #[cfg(feature = "tor")]
@@ -37,9 +38,39 @@ pub enum Error {
     Encoding(String),
 }
 
+/// Bumped by an emergency wipe: a worker started before it is stale.
+static EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+thread_local! {
+    /// The epoch a worker thread was started in (None on other threads).
+    static BORN: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+pub(crate) fn epoch() -> u64 {
+    EPOCH.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+pub(crate) fn bump_epoch() {
+    EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Mark the current thread as a worker of `epoch`.
+pub(crate) fn set_born(epoch: u64) {
+    BORN.with(|b| b.set(Some(epoch)));
+}
+
+/// This thread is a worker that outlived a wipe.
+pub(crate) fn stale() -> bool {
+    BORN.with(|b| b.get()).is_some_and(|e| e != epoch())
+}
+
 /// Where sanctum keeps its files: ~/.sanctum, or ~/Library/.sanctum on iOS,
-/// where the app container's root is read-only on real devices.
+/// where the app container's root is read-only on real devices. None for a
+/// worker that outlived a wipe, so it can't recreate any of it.
 pub fn data_dir() -> Option<String> {
+    if stale() {
+        return None;
+    }
     let home = std::env::var("HOME").ok()?;
     let base = if cfg!(target_os = "ios") { format!("{home}/Library") } else { home };
     Some(format!("{base}/.sanctum"))
@@ -127,6 +158,22 @@ pub fn version(raw: &[u8]) -> u8 {
         v: u8,
     }
     serde_json::from_slice::<V>(raw).map(|e| e.v).unwrap_or(0)
+}
+
+/// Why a v2 envelope from someone else's identity key failed to open.
+pub const KEY_CHANGED: &str = "identity key changed";
+
+/// Safety number for a 1:1 chat: libsignal's 60-digit fingerprint over both
+/// identity keys (the keys double as the stable ids), in groups of five.
+/// Both sides get the same digits, to compare in person.
+pub fn safety_number(me: &PublicKey, peer: &PublicKey) -> Option<String> {
+    let key = |pk: &PublicKey| {
+        sig::PublicKey::from_djb_public_key_bytes(pk.as_bytes()).ok().map(sig::IdentityKey::new)
+    };
+    let fp = sig::Fingerprint::new(2, 5200, me.as_bytes(), &key(me)?, peer.as_bytes(), &key(peer)?)
+        .ok()?;
+    let digits = fp.display_string().ok()?;
+    Some(digits.as_bytes().chunks(5).filter_map(|c| std::str::from_utf8(c).ok()).collect::<Vec<_>>().join(" "))
 }
 
 // ---------------------------------------------------------------------------
@@ -383,7 +430,12 @@ impl Ratchet {
             &mut s.kyber_pre_key_store,
             &mut rng(),
         ))
-        .map_err(|_| Error::Crypto("decryption failed".into()))?;
+        .map_err(|e| match e {
+            // The bundle-checked peer key is pinned: a handshake under any
+            // other identity is refused, never adopted.
+            sig::SignalProtocolError::UntrustedIdentity(_) => Error::Crypto(KEY_CHANGED.into()),
+            _ => Error::Crypto("decryption failed".into()),
+        })?;
         let peer = futures_executor::block_on(s.get_identity(&addr))
             .map_err(sig_err)?
             .ok_or_else(|| Error::Crypto("no peer identity".into()))?;
@@ -444,6 +496,17 @@ mod tests {
         let (m1, m2) = (b.seal(b"one").unwrap(), b.seal(b"two").unwrap());
         assert_eq!(a.open(&m2).unwrap().1, b"two");
         assert_eq!(a.open(&m1).unwrap().1, b"one");
+        // Both sides compute the same safety number.
+        let sn = safety_number(&alice.public(), &bob.public()).unwrap();
+        assert_eq!(sn.len(), 71);
+        assert_eq!(Some(sn), safety_number(&bob.public(), &alice.public()));
+        // A handshake from another identity is refused as a key change.
+        let (mut a2, bundle2) = Ratchet::offer(&alice).unwrap();
+        let hello = Ratchet::accept(&bob, &bundle2, &alice.public()).unwrap().seal(b"hi").unwrap();
+        a2.open(&hello).unwrap();
+        let mallory = Identity::generate();
+        let forged = Ratchet::accept(&mallory, &bundle2, &alice.public()).unwrap().seal(b"x").unwrap();
+        assert!(matches!(a2.open(&forged), Err(Error::Crypto(e)) if e == KEY_CHANGED));
         // v1 and v2 never cross.
         assert!(open(&alice, &m1).is_err());
         assert!(a.open(&seal(&bob, &alice.public(), b"x").unwrap()).is_err());

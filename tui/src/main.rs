@@ -17,9 +17,10 @@ use ratatui::{
     DefaultTerminal, Frame,
 };
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol, Resize, StatefulImage};
-use sanctum_core::contact::{spawn_worker, Cmd, Event};
+use sanctum_core::contact::{self, spawn_worker, Cmd, Event};
 use sanctum_core::demo::{self, Settings};
-use sanctum_core::store::StoredMsg;
+use sanctum_core::pay::{self, PayKind, PayLink};
+use sanctum_core::store::{Contact, Mark, StoredMsg};
 
 const REACTIONS: [&str; 6] = ["👍", "👎", "❤️", "‼️", "❓", "😂"];
 
@@ -35,6 +36,8 @@ struct Msg {
     /// Local path of an attachment (received copy, or the file we sent).
     file: Option<String>,
     text: String,
+    /// Payment chips found in the text (which shows them shortened).
+    pay: Vec<PayLink>,
     time: String,
     day: String,
 }
@@ -42,6 +45,7 @@ struct Msg {
 impl Msg {
     fn from_stored(m: StoredMsg) -> Self {
         let ts = Local.timestamp_millis_opt(m.ts_ms).single().unwrap_or_else(Local::now);
+        let scanned = if m.file_path.is_none() { pay::scan(&m.text) } else { Default::default() };
         Self {
             wire_id: m.wire_id,
             mine: m.mine,
@@ -60,13 +64,14 @@ impl Msg {
                     };
                     format!("[file] {} → {p}", m.text)
                 } else {
-                    m.text
+                    scanned.text
                 };
                 match m.sender_seat {
                     Some(seat) if !m.mine => format!("[m{}] {base}", seat + 1),
                     _ => base,
                 }
             },
+            pay: scanned.links,
             time: ts.format("%-I:%M %p").to_string(),
             day: ts.format("%A, %b %-d").to_string(),
         }
@@ -80,6 +85,42 @@ struct Chat {
     invite_link: String,
     msgs: Vec<Msg>,
     unread: u32,
+    verified: bool,
+    blocked: bool,
+    favorite: bool,
+    key_changed: bool,
+    safety: String,
+}
+
+impl Chat {
+    fn new(c: Contact, msgs: Vec<StoredMsg>) -> Self {
+        let mut chat = Self {
+            id: c.id,
+            name: c.name.clone(),
+            waiting: false,
+            invite_link: String::new(),
+            msgs: msgs.into_iter().map(Msg::from_stored).collect(),
+            unread: 0,
+            verified: false,
+            blocked: false,
+            favorite: false,
+            key_changed: false,
+            safety: String::new(),
+        };
+        chat.sync(c);
+        chat
+    }
+
+    /// Take the worker's view of everything but the name (renames are local).
+    fn sync(&mut self, c: Contact) {
+        self.waiting = c.peer_pk.is_empty();
+        self.invite_link = c.invite_link;
+        self.verified = c.verified;
+        self.blocked = c.blocked;
+        self.favorite = c.favorite;
+        self.key_changed = c.key_changed;
+        self.safety = c.safety;
+    }
 }
 
 /// The resting status line.
@@ -106,6 +147,14 @@ const COMMANDS: &[(&str, &str)] = &[
     ("/delme", "delete the last message from this device"),
     ("/delete", "delete this chat (asks to confirm)"),
     ("/timer <time>", "disappearing: off, 90m, 2w, 6mo... (1 min to 1 year)"),
+    ("/pay <cashu token>", "send ecash (bearer: whoever redeems first gets it)"),
+    ("/paycopy", "copy the newest token, invoice or address"),
+    ("/payopen", "open the newest payment in your wallet app"),
+    ("/safety", "show the safety number to compare in person"),
+    ("/verify, /unverify", "mark this chat's safety number checked"),
+    ("/block, /unblock", "drop their messages unseen (kept on this device)"),
+    ("/fav", "pin this chat to the top"),
+    ("/wipe", "erase everything on this device (asks to confirm)"),
 ];
 
 /// One transcript row: a line of text, or an inline image preview.
@@ -167,6 +216,21 @@ fn open_file(path: &str, reveal: bool) -> Result<&'static str, String> {
     Ok(if reveal { "shown in Finder" } else { "opened" })
 }
 
+/// Hand a payment URI (cashu:, lightning:, bitcoin:, rebuilt by the core
+/// from validated parts) to whatever wallet app claims the scheme.
+fn open_uri(uri: &str) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+    let tool = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    let ok = Command::new(tool)
+        .arg(uri)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|e| e.to_string())?
+        .success();
+    if ok { Ok(()) } else { Err("no wallet app handles this link; /paycopy instead".into()) }
+}
+
 /// System clipboard via the platform tool; else OSC 52, which most
 /// terminals (iTerm2, kitty, WezTerm, Ghostty, tmux) honour, even over SSH.
 fn copy_to_clipboard(text: &str) -> bool {
@@ -210,6 +274,10 @@ struct App {
     focused: bool,
     /// Chat armed by a first `/delete`; a second one confirms.
     pending_delete: Option<i64>,
+    /// Armed by a first `/wipe`.
+    pending_wipe: bool,
+    /// The selected chat's safety number is on screen (`/safety`).
+    show_safety: bool,
     input: String,
     outbound: std::sync::mpsc::Sender<Cmd>,
     events: std::sync::mpsc::Receiver<Event>,
@@ -240,6 +308,8 @@ impl App {
             react_mode: false,
             inviting: false,
             pending_delete: None,
+            pending_wipe: false,
+            show_safety: false,
             focused: true,
             input: String::new(),
             outbound: out_tx,
@@ -261,30 +331,14 @@ impl App {
         while let Ok(ev) = self.events.try_recv() {
             match ev {
                 Event::Snapshot(all) => {
-                    self.chats = all
-                        .into_iter()
-                        .map(|(c, msgs)| Chat {
-                            id: c.id,
-                            name: c.name,
-                            waiting: c.peer_pk.is_empty(),
-                            invite_link: c.invite_link,
-                            msgs: msgs.into_iter().map(Msg::from_stored).collect(),
-                            unread: 0,
-                        })
-                        .collect();
+                    self.chats = all.into_iter().map(|(c, msgs)| Chat::new(c, msgs)).collect();
+                    self.sort_chats();
                     self.status = IDLE.into();
                     self.mark_read();
                 }
                 Event::ContactAdded(c) => {
                     let ours = std::mem::take(&mut self.inviting) && !c.invite_link.is_empty();
-                    self.chats.push(Chat {
-                        id: c.id,
-                        name: c.name,
-                        waiting: c.peer_pk.is_empty(),
-                        invite_link: c.invite_link,
-                        msgs: Vec::new(),
-                        unread: 0,
-                    });
+                    self.chats.push(Chat::new(c, Vec::new()));
                     self.selected = self.chats.len() - 1;
                     if ours {
                         self.copy_invite();
@@ -355,9 +409,9 @@ impl App {
                 }
                 Event::ContactUpdated(c) => {
                     if let Some(chat) = self.chat_by_id(c.id) {
-                        chat.waiting = c.peer_pk.is_empty();
-                        chat.invite_link = c.invite_link;
+                        chat.sync(c);
                     }
+                    self.sort_chats();
                 }
                 Event::ContactRemoved { contact_id } => {
                     self.chats.retain(|c| c.id != contact_id);
@@ -385,6 +439,19 @@ impl App {
             let _ = self
                 .outbound
                 .send(Cmd::AcceptInvite { link: text, name: format!("Contact {}", n + 1) });
+            self.input.clear();
+            return;
+        }
+        // Erasing everything takes two, like /delete.
+        if std::mem::take(&mut self.pending_wipe) && text == "/wipe" {
+            self.wipe();
+            self.input.clear();
+            return;
+        }
+        if text == "/wipe" {
+            self.pending_wipe = true;
+            self.status =
+                "ERASE EVERYTHING on this device (chats, keys, settings)? /wipe again to confirm".into();
             self.input.clear();
             return;
         }
@@ -449,6 +516,44 @@ impl App {
             self.input.clear();
             return;
         }
+        if text == "/paycopy" || text == "/payopen" {
+            let link = self.current().and_then(|c| c.msgs.iter().rev().find_map(|m| m.pay.first().cloned()));
+            self.status = match link {
+                None => "no payment in this chat".into(),
+                Some(l) if text == "/paycopy" && copy_to_clipboard(&l.raw) => "copied".into(),
+                Some(_) if text == "/paycopy" => "couldn't reach the clipboard".into(),
+                Some(l) => match open_uri(&l.uri) {
+                    Ok(()) => "handed to your wallet app".into(),
+                    Err(e) => format!("error: {e}"),
+                },
+            };
+            self.input.clear();
+            return;
+        }
+        if text == "/safety" {
+            self.show_safety = !self.show_safety;
+            self.input.clear();
+            return;
+        }
+        let mark = match text.as_str() {
+            "/verify" => Some((Mark::Verified, true)),
+            "/unverify" => Some((Mark::Verified, false)),
+            "/block" => Some((Mark::Blocked, true)),
+            "/unblock" => Some((Mark::Blocked, false)),
+            "/fav" => Some((Mark::Favorite, !self.chats[self.selected].favorite)),
+            _ => None,
+        };
+        if let Some((mark, on)) = mark {
+            if sel < 0 {
+                self.status = "direct chats only, for now".into();
+            } else if matches!(mark, Mark::Verified) && on && self.chats[self.selected].safety.is_empty() {
+                self.status = "no safety number until they join".into();
+            } else {
+                let _ = self.outbound.send(Cmd::Mark { contact_id: sel, mark, on });
+            }
+            self.input.clear();
+            return;
+        }
         if text == "/clear" || text == "/clearweek" {
             let older = (text == "/clearweek").then_some(7 * 86400);
             let _ = self.outbound.send(Cmd::ClearHistory { contact_id: sel, older_than_secs: older });
@@ -465,6 +570,21 @@ impl App {
             }
             self.input.clear();
             return;
+        }
+        let mut text = text;
+        if let Some(arg) = text.strip_prefix("/pay ") {
+            match pay::pay_token(arg) {
+                Ok((token, info)) => {
+                    let amount = info.display_amount().unwrap_or_default();
+                    self.status = format!("sending {amount}. {}", pay::BEARER_WARNING);
+                    text = token;
+                }
+                Err(e) => {
+                    self.status = format!("error: {e}");
+                    self.input.clear();
+                    return;
+                }
+            }
         }
         let wire_id = ulid::Ulid::new().to_string();
         if let Some(path) = text.strip_prefix("/file ") {
@@ -493,6 +613,35 @@ impl App {
                 Ok(what) => what.into(),
                 Err(e) => format!("error: {e}"),
             },
+        };
+    }
+
+    /// Favorites first, otherwise as they were; the selection follows its chat.
+    fn sort_chats(&mut self) {
+        let sel = self.chats.get(self.selected).map(|c| c.id);
+        self.chats.sort_by_key(|c| !c.favorite);
+        if let Some(i) = sel.and_then(|id| self.chats.iter().position(|c| c.id == id)) {
+            self.selected = i;
+        }
+    }
+
+    /// Emergency wipe, then start over as on first launch with a new worker.
+    fn wipe(&mut self) {
+        let result = contact::wipe();
+        let (out_tx, out_rx) = std::sync::mpsc::channel();
+        let (ev_tx, ev_rx) = std::sync::mpsc::channel();
+        spawn_worker(out_rx, ev_tx);
+        self.outbound = out_tx;
+        self.events = ev_rx;
+        self.chats.clear();
+        self.selected = 0;
+        self.settings = Settings::load();
+        self.previews.borrow_mut().clear();
+        self.show_safety = false;
+        self.inviting = false;
+        self.status = match result {
+            Ok(()) => "wiped: nothing of yours is left on this device".into(),
+            Err(e) => format!("error: wipe incomplete: {e}"),
         };
     }
 
@@ -527,6 +676,7 @@ impl App {
 
     fn push_own(&mut self, wire_id: &str, text: String) {
         let now = Local::now();
+        let scanned = pay::scan(&text);
         if let Some(c) = self.current() {
             c.msgs.push(Msg {
                 wire_id: wire_id.into(),
@@ -536,7 +686,8 @@ impl App {
                 read: false,
                 reaction: None,
                 file: None,
-                text,
+                pay: scanned.links,
+                text: scanned.text,
                 time: now.format("%-I:%M %p").to_string(),
                 day: now.format("%A, %b %-d").to_string(),
             });
@@ -597,7 +748,13 @@ impl App {
             } else {
                 Style::default().fg(Color::Gray)
             };
-            side.push(Line::from(Span::styled(format!("{marker}{}{suffix}", c.name), style)));
+            let star = if c.favorite { "★ " } else { "" };
+            let flags = match (c.key_changed, c.blocked) {
+                (true, _) => " ⚠",
+                (_, true) => " ⊘",
+                _ => "",
+            };
+            side.push(Line::from(Span::styled(format!("{marker}{star}{}{suffix}{flags}", c.name), style)));
         }
         if self.inviting {
             const FRAMES: [char; 10] =
@@ -628,7 +785,11 @@ impl App {
         let title = self
             .chats
             .get(self.selected)
-            .map(|c| c.name.clone())
+            .map(|c| match (c.verified, c.blocked) {
+                (_, true) => format!("{} (blocked)", c.name),
+                (true, _) => format!("{} ✓ verified", c.name),
+                _ => c.name.clone(),
+            })
             .unwrap_or_else(|| "Sanctum".into());
         let hint = "tab switch · ^N invite · ^R react · ^U unsend · ^S settings & commands · esc quit";
         let top = Line::from(vec![
@@ -663,6 +824,32 @@ impl App {
         let width = body.width.saturating_sub(2) as usize;
         let mut lines: Vec<Row> = Vec::new();
         if let Some(c) = self.chats.get(self.selected) {
+            if c.key_changed {
+                let warn = Style::default().fg(Color::Red).bold();
+                lines.push(Row::Text(Line::from(Span::styled(
+                    " ⚠ Someone wrote to this chat under a different identity key. It was refused.",
+                    warn,
+                ))));
+                lines.push(Row::Text(Line::from(Span::styled(
+                    "   Compare safety numbers in person (/safety), then /verify.",
+                    warn,
+                ))));
+                lines.push(Row::Text(Line::raw("")));
+            }
+            if self.show_safety {
+                let note = Style::default().fg(Color::Cyan);
+                let head = if c.safety.is_empty() {
+                    " No safety number yet: it appears once they join (groups: not yet).".to_string()
+                } else {
+                    format!(" Safety number with {}. Same digits on both screens? /verify", c.name)
+                };
+                lines.push(Row::Text(Line::from(Span::styled(head, note))));
+                let groups: Vec<&str> = c.safety.split(' ').collect();
+                for row in groups.chunks(4).filter(|r| !r[0].is_empty()) {
+                    lines.push(Row::Text(Line::from(Span::styled(format!("   {}", row.join("  ")), note.bold()))));
+                }
+                lines.push(Row::Text(Line::raw("")));
+            }
             if !c.invite_link.trim().is_empty() {
                 lines.push(Row::Text(Line::from(Span::styled(
                     " Waiting for them to join. Send this invite link (Ctrl-Y copies it):",
@@ -746,6 +933,29 @@ impl App {
                     ])
                 };
                 lines.push(Row::Text(line));
+                for l in &m.pay {
+                    let icon = match l.kind {
+                        PayKind::Cashu => "🥜",
+                        PayKind::Lightning => "⚡",
+                        PayKind::Bitcoin => "₿",
+                    };
+                    let memo = l.memo.as_ref().map(|m| format!(" · {m}")).unwrap_or_default();
+                    let chip = format!(" {icon} {}{memo} ", l.label);
+                    let hint = match l.kind {
+                        PayKind::Cashu => " bearer: whoever redeems first gets it · /paycopy /payopen",
+                        _ => " /payopen in your wallet · /paycopy",
+                    };
+                    for (text, style) in [
+                        (chip, Style::default().fg(Color::Black).bg(Color::Yellow)),
+                        (hint.to_string(), Style::default().fg(Color::DarkGray)),
+                    ] {
+                        let pad = if m.mine { width.saturating_sub(text.chars().count()) } else { 0 };
+                        lines.push(Row::Text(Line::from(vec![
+                            Span::raw(" ".repeat(pad)),
+                            Span::styled(text, style),
+                        ])));
+                    }
+                }
                 if let Some(path) = m.file.as_ref().filter(|p| is_image(p)) {
                     lines.push(Row::Image { path: path.clone(), mine: m.mine });
                 }
@@ -861,6 +1071,7 @@ impl App {
         if !sticky && now.duration_since(self.status_since.1).as_secs() >= ttl {
             self.status = IDLE.into();
             self.pending_delete = None;
+            self.pending_wipe = false;
         }
     }
 
@@ -920,6 +1131,7 @@ impl App {
                                 self.selected = (self.selected + 1) % self.chats.len();
                                 self.status = IDLE.into(); // notes belong to the chat you left
                                 self.pending_delete = None;
+                                self.show_safety = false;
                                 self.mark_read();
                                 if let Some(c) = self.current() {
                                     c.unread = 0;

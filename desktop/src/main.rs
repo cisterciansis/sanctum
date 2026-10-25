@@ -13,9 +13,10 @@ use gpui_kit::component::{
     Theme, ThemeMode, *,
 };
 use gpui_kit::{prelude::FluentBuilder as _, *};
-use sanctum_core::contact::{spawn_worker, Cmd, Event};
+use sanctum_core::contact::{self, spawn_worker, Cmd, Event};
 use sanctum_core::demo::{self, Settings};
-use sanctum_core::store::StoredMsg;
+use sanctum_core::pay::{self, PayKind, PayLink};
+use sanctum_core::store::{Contact, Mark, StoredMsg};
 
 const REACTIONS: [&str; 6] = ["👍", "👎", "❤️", "‼️", "❓", "😂"];
 const ACCENTS: [(&str, u32); 6] = [
@@ -83,6 +84,8 @@ struct Msg {
     read: bool,
     reaction: Option<SharedString>,
     text: SharedString,
+    /// Payment chips found in the text (which shows them shortened).
+    pay: Vec<PayLink>,
     file: Option<(SharedString, String)>,
     sender_seat: Option<i64>,
     ts_ms: i64,
@@ -93,6 +96,7 @@ struct Msg {
 impl Msg {
     fn from_stored(m: StoredMsg) -> Self {
         let ts = Local.timestamp_millis_opt(m.ts_ms).single().unwrap_or_else(Local::now);
+        let scanned = if m.file_path.is_none() { pay::scan(&m.text) } else { Default::default() };
         Self {
             wire_id: m.wire_id,
             mine: m.mine,
@@ -101,7 +105,8 @@ impl Msg {
             sent: true,
             read: m.mine && m.read_ms.is_some(),
             reaction: m.reaction.map(Into::into),
-            text: m.text.clone().into(),
+            text: if m.file_path.is_none() { scanned.text.into() } else { m.text.clone().into() },
+            pay: scanned.links,
             file: m.file_path.map(|p| (m.text.into(), p)),
             sender_seat: m.sender_seat,
             ts_ms: m.ts_ms,
@@ -112,6 +117,7 @@ impl Msg {
 
     fn now(wire_id: String, mine: bool, text: String, file: Option<(String, String)>) -> Self {
         let now = Local::now();
+        let scanned = if file.is_none() { pay::scan(&text) } else { Default::default() };
         Self {
             wire_id,
             mine,
@@ -120,7 +126,8 @@ impl Msg {
             sent: !mine,
             read: false,
             reaction: None,
-            text: text.into(),
+            text: if file.is_none() { scanned.text.into() } else { text.into() },
+            pay: scanned.links,
             file: file.map(|(n, p)| (n.into(), p)),
             sender_seat: None,
             ts_ms: now.timestamp_millis(),
@@ -142,6 +149,42 @@ struct Chat {
     invite_link: String,
     msgs: Vec<Msg>,
     unread: u32,
+    verified: bool,
+    blocked: bool,
+    favorite: bool,
+    key_changed: bool,
+    safety: String,
+}
+
+impl Chat {
+    fn new(c: Contact, msgs: Vec<StoredMsg>) -> Self {
+        let mut chat = Self {
+            id: c.id,
+            name: c.name.clone().into(),
+            waiting: false,
+            invite_link: String::new(),
+            msgs: msgs.into_iter().map(Msg::from_stored).collect(),
+            unread: 0,
+            verified: false,
+            blocked: false,
+            favorite: false,
+            key_changed: false,
+            safety: String::new(),
+        };
+        chat.sync(c);
+        chat
+    }
+
+    /// Take the worker's view of everything but the name (renames are local).
+    fn sync(&mut self, c: Contact) {
+        self.waiting = c.peer_pk.is_empty();
+        self.invite_link = c.invite_link;
+        self.verified = c.verified;
+        self.blocked = c.blocked;
+        self.favorite = c.favorite;
+        self.key_changed = c.key_changed;
+        self.safety = c.safety;
+    }
 }
 
 struct ChatApp {
@@ -158,6 +201,8 @@ struct ChatApp {
     group_size: i64,
     inviting: bool,
     joining: bool,
+    /// Armed by the first click on Emergency wipe.
+    confirm_wipe: bool,
     picker_for: Option<usize>,
     /// Message whose delete actions are open (right-click a bubble).
     actions_for: Option<usize>,
@@ -230,6 +275,7 @@ impl ChatApp {
             group_size: 3,
             inviting: false,
             joining: false,
+            confirm_wipe: false,
             picker_for: None,
             actions_for: None,
             chat_menu_for: None,
@@ -258,17 +304,8 @@ impl ChatApp {
             changed = true;
             match ev {
                 Event::Snapshot(all) => {
-                    self.chats = all
-                        .into_iter()
-                        .map(|(c, msgs)| Chat {
-                            id: c.id,
-                            name: c.name.into(),
-                            waiting: c.peer_pk.is_empty(),
-                            invite_link: c.invite_link,
-                            msgs: msgs.into_iter().map(Msg::from_stored).collect(),
-                            unread: 0,
-                        })
-                        .collect();
+                    self.chats = all.into_iter().map(|(c, msgs)| Chat::new(c, msgs)).collect();
+                    self.sort_chats();
                     self.status = "ready".into();
                     self.mark_read();
                 }
@@ -278,14 +315,7 @@ impl ChatApp {
                         self.joining = false;
                         self.show_join = false;
                     }
-                    self.chats.push(Chat {
-                        id: c.id,
-                        name: c.name.into(),
-                        waiting: c.peer_pk.is_empty(),
-                        invite_link: c.invite_link,
-                        msgs: Vec::new(),
-                        unread: 0,
-                    });
+                    self.chats.push(Chat::new(c, Vec::new()));
                     self.selected = self.chats.len() - 1;
                 }
                 Event::History { contact_id, msgs } => {
@@ -295,9 +325,9 @@ impl ChatApp {
                 }
                 Event::ContactUpdated(c) => {
                     if let Some(chat) = self.chat_by_id(c.id) {
-                        chat.waiting = c.peer_pk.is_empty();
-                        chat.invite_link = c.invite_link;
+                        chat.sync(c);
                     }
+                    self.sort_chats();
                 }
                 Event::ContactRemoved { contact_id } => {
                     self.chat_menu_for = None;
@@ -394,6 +424,44 @@ impl ChatApp {
         }
     }
 
+    /// Favorites first, otherwise as they were; the selection follows its chat.
+    fn sort_chats(&mut self) {
+        let sel = self.selected_id();
+        self.chats.sort_by_key(|c| !c.favorite);
+        if let Some(i) = sel.and_then(|id| self.chats.iter().position(|c| c.id == id)) {
+            self.selected = i;
+        }
+        self.chat_menu_for = None; // indices may have moved
+    }
+
+    fn mark(&self, contact_id: i64, mark: Mark, on: bool) {
+        let _ = self.outbound.send(Cmd::Mark { contact_id, mark, on });
+    }
+
+    /// Emergency wipe, then start over as on first launch with a new worker.
+    fn wipe(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let result = contact::wipe();
+        let (out_tx, out_rx) = std::sync::mpsc::channel();
+        let (ev_tx, ev_rx) = std::sync::mpsc::channel();
+        spawn_worker(out_rx, ev_tx);
+        self.outbound = out_tx;
+        self.events = ev_rx;
+        self.chats.clear();
+        self.selected = 0;
+        self.settings = Settings::load();
+        Theme::change(ThemeMode::Light, Some(window), cx); // the default theme
+        self.input_state.update(cx, |s, cx| s.set_value("", window, cx));
+        self.confirm_wipe = false;
+        self.show_settings = false;
+        self.show_chat_info = false;
+        (self.picker_for, self.actions_for, self.chat_menu_for) = (None, None, None);
+        (self.inviting, self.joining) = (false, false);
+        self.status = match result {
+            Ok(()) => "wiped".into(),
+            Err(e) => format!("error: wipe incomplete: {e}").into(),
+        };
+    }
+
     fn selected_id(&self) -> Option<i64> {
         self.chats.get(self.selected).map(|c| c.id)
     }
@@ -428,6 +496,17 @@ impl ChatApp {
             return;
         }
         let Some(sel) = self.selected_id() else { return };
+        let mut text = text;
+        if let Some(arg) = text.strip_prefix("/pay ") {
+            match pay::pay_token(arg) {
+                Ok((token, _)) => text = token, // the chip carries the bearer warning
+                Err(e) => {
+                    self.status = format!("error: {e}").into();
+                    cx.notify();
+                    return;
+                }
+            }
+        }
         self.input_state.update(cx, |s, cx| s.set_value("", window, cx));
         let wire_id = ulid::Ulid::new().to_string();
         if let Some(c) = self.chats.get_mut(self.selected) {
@@ -655,7 +734,16 @@ impl ChatApp {
                     }
                     cx.notify();
                 }))
-                .child(c.name.clone())
+                .child(format!(
+                    "{}{}{}",
+                    if c.favorite { "★ " } else { "" },
+                    c.name,
+                    match (c.key_changed, c.blocked) {
+                        (true, _) => " ⚠",
+                        (_, true) => " ⊘",
+                        _ => "",
+                    }
+                ))
                 .child(h_flex().gap_1().items_center().children(trailing).child(dots));
             col = col.child(row);
 
@@ -701,6 +789,28 @@ impl ChatApp {
                             }),
                         ),
                     );
+                if id >= 0 {
+                    let (fav, blocked) = (c.favorite, c.blocked);
+                    menu = menu
+                        .child(
+                            item(if fav { "Unfavorite" } else { "Favorite" }, false, p.text, p.hover)
+                                .id(("m-fav", i))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.mark(id, Mark::Favorite, !fav);
+                                    this.chat_menu_for = None;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            item(if blocked { "Unblock" } else { "Block" }, false, p.text, p.hover)
+                                .id(("m-block", i))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.mark(id, Mark::Blocked, !blocked);
+                                    this.chat_menu_for = None;
+                                    cx.notify();
+                                })),
+                        );
+                }
                 if let Some(link) = pending_link {
                     let links: Vec<String> = link.split('\n').map(str::to_string).collect();
                     let many = links.len() > 1;
@@ -786,6 +896,7 @@ impl ChatApp {
             .on_click(cx.listener(|this, _, _, cx| {
                 this.show_settings = !this.show_settings;
                 this.show_chat_info = false;
+                this.confirm_wipe = false;
                 cx.notify();
             }))
             .child(
@@ -821,10 +932,14 @@ impl Render for ChatApp {
         let p = pal(dark);
         let accent = self.settings.accent;
         let show_time = self.settings.timestamps;
-        let peer_name = self
+        let peer_name: SharedString = self
             .chats
             .get(self.selected)
-            .map(|c| c.name.clone())
+            .map(|c| match (c.verified, c.blocked) {
+                (_, true) => format!("{} (blocked)", c.name).into(),
+                (true, _) => format!("{} ✓", c.name).into(),
+                _ => c.name.clone(),
+            })
             .unwrap_or_else(|| "Sanctum".into());
         let error_line = self.status.starts_with("error").then(|| self.status.clone());
 
@@ -988,6 +1103,34 @@ impl Render for ChatApp {
                     ),
                 )
                 .child(
+                    row(
+                        "Emergency wipe",
+                        Some("erase every chat, key and setting on this device · offline, instant"),
+                    )
+                    .child(
+                        div()
+                            .id("wipe")
+                            .cursor_pointer()
+                            .px_3()
+                            .py_1()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(0xFF453A))
+                            .text_sm()
+                            .text_color(rgb(0xFF453A))
+                            .when(self.confirm_wipe, |d| d.bg(rgb(0xFF453A)).text_color(rgb(0xFFFFFF)))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if this.confirm_wipe {
+                                    this.wipe(window, cx);
+                                } else {
+                                    this.confirm_wipe = true;
+                                }
+                                cx.notify();
+                            }))
+                            .child(if self.confirm_wipe { "Click again to erase everything" } else { "Wipe…" }),
+                    ),
+                )
+                .child(
                     div()
                         .pt_1()
                         .text_xs()
@@ -1097,6 +1240,49 @@ impl Render for ChatApp {
                                     }
                                 }))
                                 .child("Save"),
+                        )
+                }))
+                .children(self.chats.get(self.selected).filter(|c| c.id >= 0).map(|c| {
+                    let (id, verified, blocked) = (c.id, c.verified, c.blocked);
+                    let hint = if c.safety.is_empty() {
+                        "appears once they join"
+                    } else {
+                        "same digits on both screens? then it's really them"
+                    };
+                    v_flex()
+                        .w_full()
+                        .gap_3()
+                        .child(
+                            row("Safety number", Some(hint)).when(!c.safety.is_empty(), |r| {
+                                r.child(
+                                    Button::new("verify")
+                                        .outline()
+                                        .label(if verified { "Verified ✓" } else { "Mark verified" })
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.mark(id, Mark::Verified, !verified);
+                                            cx.notify();
+                                        })),
+                                )
+                            }),
+                        )
+                        .when(!c.safety.is_empty(), |d| {
+                            d.child(
+                                div()
+                                    .font_family("Menlo")
+                                    .text_sm()
+                                    .text_color(rgb(p.text))
+                                    .child(c.safety.clone()),
+                            )
+                        })
+                        .child(
+                            row("Block", Some("drop their messages unseen · kept on this device")).child(
+                                Switch::new("set-block").checked(blocked).on_click(cx.listener(
+                                    move |this, v: &bool, _, cx| {
+                                        this.mark(id, Mark::Blocked, *v);
+                                        cx.notify();
+                                    },
+                                )),
+                            ),
                         )
                 }))
                 .children(self.selected_id().map(|id| {
@@ -1361,6 +1547,22 @@ impl Render for ChatApp {
             card
         });
 
+        let key_warning = self.chats.get(self.selected).filter(|c| c.key_changed).map(|_| {
+            v_flex()
+                .w_full()
+                .gap_1()
+                .px_3()
+                .py_2()
+                .bg(rgb(if dark { 0x3A2A2A } else { 0xFFF0F0 }))
+                .border_b_1()
+                .border_color(rgb(0xFF453A))
+                .child(div().text_sm().font_semibold().text_color(rgb(0xFF453A)).child("Identity key changed"))
+                .child(div().text_xs().text_color(rgb(p.text)).child(
+                    "Someone wrote to this chat under a different identity key. It was refused. \
+                     Compare safety numbers in person (⋯ → Safety number), then mark verified.",
+                ))
+        });
+
         let mut rows: Vec<AnyElement> = Vec::new();
         if let Some(chat) = self.chats.get(self.selected) {
             // Only the newest finished send carries Sent / Delivered.
@@ -1523,6 +1725,59 @@ impl Render for ChatApp {
                     .children(sender_label)
                     .children(picker)
                     .child(row);
+                for (n, l) in m.pay.iter().enumerate() {
+                    let icon = match l.kind {
+                        PayKind::Cashu => "🥜",
+                        PayKind::Lightning => "⚡",
+                        PayKind::Bitcoin => "₿",
+                    };
+                    let (uri, raw) = (l.uri.clone(), l.raw.clone());
+                    let action = |id: &'static str, label: &'static str| {
+                        div()
+                            .id((id, i * 10 + n))
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(rgb(accent))
+                            .hover(|d| d.underline())
+                            .child(label)
+                    };
+                    col = col.child(
+                        h_flex()
+                            .mt_1()
+                            .gap_2()
+                            .items_center()
+                            .px_3()
+                            .py_1()
+                            .rounded(px(12.))
+                            .border_1()
+                            .border_color(rgb(p.border))
+                            .bg(rgb(p.well))
+                            .text_sm()
+                            .text_color(rgb(p.text))
+                            .child(icon)
+                            .child(
+                                v_flex()
+                                    .child(div().font_semibold().child(l.label.clone()))
+                                    .children(l.memo.clone().map(|memo| {
+                                        div().text_xs().text_color(rgb(p.sub)).child(memo)
+                                    })),
+                            )
+                            // Hands the URI to whatever wallet claims the scheme.
+                            .child(action("pay-open", "Open").on_click(cx.listener(
+                                move |_, _, _, cx| cx.open_url(&uri),
+                            )))
+                            .child(action("pay-copy", "Copy").on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(raw.clone()));
+                                    this.status = "copied".into();
+                                    cx.notify();
+                                },
+                            ))),
+                    );
+                    if l.kind == PayKind::Cashu {
+                        col = col.child(div().text_xs().text_color(rgb(p.sub)).child(pay::BEARER_WARNING));
+                    }
+                }
                 if !caption.is_empty() {
                     col = col
                         .child(div().text_xs().text_color(rgb(p.sub)).child(caption.join(" · ")));
@@ -1641,6 +1896,7 @@ impl Render for ChatApp {
             .children(chat_info_panel)
             .children(group_panel)
             .children(join_panel)
+            .children(key_warning)
             .children(banner)
             .child(messages)
             .child(composer);
