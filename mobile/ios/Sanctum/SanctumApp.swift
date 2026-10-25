@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct SanctumApp: App {
     @StateObject private var model = AppModel()
+    @State private var splash = true
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -11,6 +12,11 @@ struct SanctumApp: App {
                 .environmentObject(model)
                 .onOpenURL { url in
                     model.join(url.absoluteString)
+                }
+                .overlay {
+                    if splash {
+                        SplashView(ready: model.loaded) { splash = false }
+                    }
                 }
         }
         // Read receipts only count what's on screen.
@@ -122,6 +128,8 @@ extension AppModel {
 @MainActor
 final class AppModel: ObservableObject {
     @Published var chats: [ChatVM] = []
+    /// The first snapshot of chats has arrived (ends the launch animation).
+    @Published var loaded = false
     @Published var selected: Int64?
     /// App is in the foreground (scene active), so an open chat is being seen.
     var isActive = true
@@ -171,6 +179,7 @@ final class AppModel: ObservableObject {
         for ev in client.pollEvents() {
             switch ev {
             case .snapshot(let list):
+                loaded = true
                 chats = list.map { c in
                     ChatVM(c, msgs: client.snapshotMessages(contactId: c.id).map(toVM))
                 }
