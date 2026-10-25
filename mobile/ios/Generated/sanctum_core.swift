@@ -400,6 +400,22 @@ fileprivate final class UniffiHandleMap<T>: @unchecked Sendable {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
+    typealias FfiType = UInt32
+    typealias SwiftType = UInt32
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt32 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
     typealias FfiType = UInt64
     typealias SwiftType = UInt64
@@ -494,6 +510,24 @@ fileprivate struct FfiConverterString: FfiConverter {
     }
 }
 
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterData: FfiConverterRustBuffer {
+    typealias SwiftType = Data
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        let len: Int32 = try readInt(&buf)
+        return Data(try readBytes(&buf, count: Int(len)))
+    }
+
+    public static func write(_ value: Data, into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        writeBytes(&buf, value)
+    }
+}
+
 
 
 
@@ -519,6 +553,12 @@ public protocol ClientProtocol: AnyObject, Sendable {
      * while it is on screen).
      */
     func markRead(contactId: Int64) 
+    
+    /**
+     * One frame from a mesh link (an opaque per-link id). Returns a packet
+     * to relay to every other link, if any.
+     */
+    func meshReceive(link: String, frame: Data)  -> Data?
     
     /**
      * Mint a group (2-6 members): one invite link per other seat arrives in
@@ -727,6 +767,19 @@ open func markRead(contactId: Int64)  {try! rustCall() {
         FfiConverterInt64.lower(contactId),$0
     )
 }
+}
+    
+    /**
+     * One frame from a mesh link (an opaque per-link id). Returns a packet
+     * to relay to every other link, if any.
+     */
+open func meshReceive(link: String, frame: Data) -> Data?  {
+    return try!  FfiConverterOptionData.lift(try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_mesh_receive(self.uniffiClonePointer(),
+        FfiConverterString.lower(link),
+        FfiConverterData.lower(frame),$0
+    )
+})
 }
     
     /**
@@ -2410,6 +2463,30 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionData: FfiConverterRustBuffer {
+    typealias SwiftType = Data?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterData.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterData.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeFfiPayCard: FfiConverterRustBuffer {
     typealias SwiftType = FfiPayCard?
 
@@ -2500,6 +2577,31 @@ fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterString.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceData: FfiConverterRustBuffer {
+    typealias SwiftType = [Data]
+
+    public static func write(_ value: [Data], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterData.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [Data] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [Data]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterData.read(from: &buf))
         }
         return seq
     }
@@ -2652,6 +2754,42 @@ public func disappearPresets() -> [UInt64]  {
 })
 }
 /**
+ * Bluetooth mesh (see `mesh`): the app's radio layer moves frames, the core
+ * does the rest. Split a packet into frames that fit one link write.
+ */
+public func meshFrames(packet: Data, mtu: UInt32) -> [Data]  {
+    return try!  FfiConverterSequenceData.lift(try! rustCall() {
+    uniffi_sanctum_core_fn_func_mesh_frames(
+        FfiConverterData.lower(packet),
+        FfiConverterUInt32.lower(mtu),$0
+    )
+})
+}
+public func meshLinkClosed(link: String)  {try! rustCall() {
+    uniffi_sanctum_core_fn_func_mesh_link_closed(
+        FfiConverterString.lower(link),$0
+    )
+}
+}
+/**
+ * Packets this device originates (its sends and acks), for every link.
+ */
+public func meshOutbox() -> [Data]  {
+    return try!  FfiConverterSequenceData.lift(try! rustCall() {
+    uniffi_sanctum_core_fn_func_mesh_outbox($0
+    )
+})
+}
+/**
+ * How many links are up; 0 sends everything straight to Hippius.
+ */
+public func meshSetLinks(count: UInt32)  {try! rustCall() {
+    uniffi_sanctum_core_fn_func_mesh_set_links(
+        FfiConverterUInt32.lower(count),$0
+    )
+}
+}
+/**
  * Custom timer like "90m" or "6mo"; None unless off or 1 minute to 1 year.
  */
 public func parseDisappear(input: String) -> UInt64?  {
@@ -2737,6 +2875,18 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sanctum_core_checksum_func_disappear_presets() != 48558) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sanctum_core_checksum_func_mesh_frames() != 486) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_func_mesh_link_closed() != 20665) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_func_mesh_outbox() != 62963) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_func_mesh_set_links() != 42781) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sanctum_core_checksum_func_parse_disappear() != 6956) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2774,6 +2924,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_method_client_mark_read() != 52460) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_mesh_receive() != 44212) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_method_client_new_group() != 58032) {

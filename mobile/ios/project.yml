@@ -33,6 +33,9 @@ targets:
         CFBundleDisplayName: Sanctum
         UILaunchScreen: {}
         NSCameraUsageDescription: Sanctum uses the camera only to scan a contact's safety-number code.
+        NSBluetoothAlwaysUsageDescription: Sanctum can carry your encrypted messages over Bluetooth when there's no internet, relayed by nearby Sanctum devices.
+        # Keep relaying and receiving over the mesh in the background.
+        UIBackgroundModes: [bluetooth-central, bluetooth-peripheral]
         CFBundleURLTypes:
           - CFBundleURLName: chat.sanctum
             CFBundleURLSchemes: [sanctum]

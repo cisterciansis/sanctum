@@ -13,6 +13,7 @@ pub mod contact;
 pub mod demo;
 pub mod invite;
 pub mod pay;
+pub mod mesh;
 pub mod provision;
 pub mod store;
 pub mod tao;

@@ -377,6 +377,18 @@ struct SettingsSheet: View {
                     }
                 }
                 Section {
+                    Toggle("Nearby (Bluetooth)", isOn: Binding(
+                        get: { model.meshOn },
+                        set: { model.setMesh($0) }
+                    ))
+                } footer: {
+                    if model.meshOn {
+                        Text("\(model.meshLinks) nearby link\(model.meshLinks == 1 ? "" : "s"). Chats try Bluetooth first, relayed by up to 7 Sanctum devices, still end-to-end encrypted.")
+                    } else {
+                        Text("Message nearby contacts without internet. Others around can tell a Sanctum user is near, never who or what.")
+                    }
+                }
+                Section {
                     Toggle("Read Receipts", isOn: Binding(
                         get: { model.settings.readReceipts },
                         set: { model.settings.readReceipts = $0; model.saveSettings() }

@@ -134,6 +134,11 @@ final class AppModel: ObservableObject {
     /// TAO wallet state, and a recovery phrase the user chose to see.
     @Published var wallet: FfiWallet?
     @Published var phrase: PhraseVM?
+    /// Bluetooth mesh, opt-in: advertising tells nearby scanners that a
+    /// Sanctum user is around (never who).
+    @Published var meshOn = UserDefaults.standard.bool(forKey: "meshOn")
+    @Published var meshLinks = 0
+    private var mesh: Mesh?
 
     // Exactly one Client: each spawns a worker, and two workers would race
     // on the same chats' ratchet state.
@@ -148,6 +153,16 @@ final class AppModel: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
+        if meshOn { setMesh(true) }
+    }
+
+    func setMesh(_ on: Bool) {
+        meshOn = on
+        UserDefaults.standard.set(on, forKey: "meshOn")
+        mesh?.stop()
+        mesh = on ? Mesh(client: client) { [weak self] n in
+            Task { @MainActor in self?.meshLinks = n }
+        } : nil
     }
 
     func tick() {

@@ -258,6 +258,30 @@ impl Client {
     }
 }
 
+/// Bluetooth mesh (see `mesh`): the app's radio layer moves frames, the core
+/// does the rest. Split a packet into frames that fit one link write.
+#[uniffi::export]
+pub fn mesh_frames(packet: Vec<u8>, mtu: u32) -> Vec<Vec<u8>> {
+    crate::mesh::frames(&packet, mtu as usize)
+}
+
+/// Packets this device originates (its sends and acks), for every link.
+#[uniffi::export]
+pub fn mesh_outbox() -> Vec<Vec<u8>> {
+    crate::mesh::MESH.drain()
+}
+
+/// How many links are up; 0 sends everything straight to Hippius.
+#[uniffi::export]
+pub fn mesh_set_links(count: u32) {
+    crate::mesh::MESH.set_neighbors(count as usize)
+}
+
+#[uniffi::export]
+pub fn mesh_link_closed(link: String) {
+    crate::mesh::MESH.link_closed(&link)
+}
+
 #[uniffi::export]
 impl Client {
     #[uniffi::constructor]
@@ -554,6 +578,14 @@ impl Client {
         *self.events.lock().expect("events lock") = ev_rx;
         self.history.lock().expect("history lock").clear();
         result.err()
+    }
+
+    /// One frame from a mesh link (an opaque per-link id). Returns a packet
+    /// to relay to every other link, if any.
+    pub fn mesh_receive(&self, link: String, frame: Vec<u8>) -> Option<Vec<u8>> {
+        let (packet, relay) = crate::mesh::MESH.receive(&link, &frame)?;
+        let _ = self.outbound.lock().expect("outbound lock").send(Cmd::Mesh(packet));
+        relay
     }
 
     pub fn unsend(&self, contact_id: i64, wire_id: String) {
