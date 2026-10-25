@@ -117,6 +117,20 @@ struct WalletScreen: View {
     }
 }
 
+/// TAO's τ in the circled style of SF Symbols' bitcoinsign.circle (there's
+/// no SF Symbol for TAO), so ₿ and τ read as a pair.
+struct TaoSymbol: View {
+    @ScaledMetric(relativeTo: .body) private var size: CGFloat = 12
+
+    var body: some View {
+        Image(systemName: "circle")
+            .overlay {
+                Text("τ").font(.system(size: size, weight: .semibold, design: .rounded))
+            }
+            .accessibilityLabel("TAO")
+    }
+}
+
 struct PhraseVM: Identifiable {
     let address: String
     let words: [String]

@@ -1212,7 +1212,7 @@ impl App {
         let mut rows = vec![
             Line::raw(""),
             Line::from(vec![
-                Span::raw("  TAO wallet").bold(),
+                Span::raw("  τ TAO wallet").bold(),
                 Span::styled(format!("  ·  {}  ·  r refresh · esc close", self.net_label()), dim),
             ]),
             Line::raw(""),

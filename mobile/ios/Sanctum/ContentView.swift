@@ -373,7 +373,7 @@ struct SettingsSheet: View {
                     NavigationLink {
                         WalletScreen()
                     } label: {
-                        Label("TAO Wallet", systemImage: "bitcoinsign.circle")
+                        Label { Text("TAO Wallet") } icon: { TaoSymbol() }
                     }
                 }
                 Section {

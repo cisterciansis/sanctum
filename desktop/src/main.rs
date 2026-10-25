@@ -517,7 +517,7 @@ impl ChatApp {
             h_flex()
                 .gap_3()
                 .items_center()
-                .child(div().text_sm().font_semibold().text_color(rgb(p.text)).child("TAO wallet"))
+                .child(div().text_sm().font_semibold().text_color(rgb(p.text)).child("τ TAO wallet"))
                 .child(small(self.net_label().into(), p.sub))
                 .child(div().flex_1())
                 .child(
