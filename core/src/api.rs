@@ -609,16 +609,20 @@ impl Client {
 
     /// Emergency wipe: delete all local data and start over as on first
     /// launch (a fresh worker, a fresh identity). Instant and offline.
-    /// Returns what couldn't be deleted, if anything.
-    pub fn wipe(&self) -> Option<String> {
-        let result = crate::contact::wipe();
+    /// `keep_wallets` keeps the TAO and mailbox accounts. Returns what went
+    /// wrong, if anything.
+    pub fn wipe(&self, keep_wallets: bool) -> Option<String> {
+        let result = match crate::contact::wipe(keep_wallets) {
+            Err(e) => return Some(e), // nothing erased; keep running as we were
+            Ok(problem) => problem,
+        };
         let (out_tx, out_rx) = std::sync::mpsc::channel();
         let (ev_tx, ev_rx) = std::sync::mpsc::channel();
         spawn_worker(out_rx, ev_tx);
         *self.outbound.lock().expect("outbound lock") = out_tx;
         *self.events.lock().expect("events lock") = ev_rx;
         self.history.lock().expect("history lock").clear();
-        result.err()
+        result
     }
 
     /// One frame from a mesh link (an opaque per-link id). Returns a packet

@@ -296,21 +296,41 @@ final class AppModel: ObservableObject {
         if let i = idx(id) { chats[i].favorite = on }
     }
 
-    /// Emergency wipe (triple-tap the title): database, keychain key,
-    /// settings, ratchets and files all go, at once and offline, and the
-    /// app is back at first launch.
-    func wipe() {
-        let failed = client.wipe()
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        try? FileManager.default.removeItem(at: docs.appendingPathComponent("attachments"))
+    /// Emergency wipe, at once and offline: database, keychain key,
+    /// settings, ratchets, files, caches and preferences all go, and the app
+    /// is back at first launch. `keepWallets` keeps the TAO and mailbox
+    /// accounts (the things that hold money). Triple-tapping the title is a
+    /// full wipe.
+    func wipe(keepWallets: Bool = false) {
+        let failed = client.wipe(keepWallets: keepWallets)
+        if let failed, failed.contains("nothing was erased") {
+            status = "error: \(failed)"
+            return
+        }
+        let fm = FileManager.default
+        let dirs = [
+            fm.urls(for: .documentDirectory, in: .userDomainMask)[0],
+            fm.urls(for: .cachesDirectory, in: .userDomainMask)[0],
+            fm.temporaryDirectory,
+        ]
+        for dir in dirs {
+            for item in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [] {
+                try? fm.removeItem(at: item)
+            }
+        }
+        if let id = Bundle.main.bundleIdentifier {
+            UserDefaults.standard.removePersistentDomain(forName: id)
+        }
+        if meshOn { setMesh(false) }
         chats = []
         selected = nil
         inviting = false
         settings = client.getSettings()
         hasToken = client.hasApiToken()
         wallet = nil
+        phrase = nil
         client.taoRefresh()
-        status = failed.map { "error: wipe incomplete: \($0)" } ?? "connecting…"
+        status = failed.map { "error: \($0)" } ?? "connecting…"
     }
 
     func sendFile(_ data: Data, suggestedName: String) {

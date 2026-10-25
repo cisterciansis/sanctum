@@ -660,9 +660,10 @@ public protocol ClientProtocol: AnyObject, Sendable {
     /**
      * Emergency wipe: delete all local data and start over as on first
      * launch (a fresh worker, a fresh identity). Instant and offline.
-     * Returns what couldn't be deleted, if anything.
+     * `keep_wallets` keeps the TAO and mailbox accounts. Returns what went
+     * wrong, if anything.
      */
-    func wipe()  -> String?
+    func wipe(keepWallets: Bool)  -> String?
     
 }
 open class Client: ClientProtocol, @unchecked Sendable {
@@ -1075,11 +1076,13 @@ open func unsend(contactId: Int64, wireId: String)  {try! rustCall() {
     /**
      * Emergency wipe: delete all local data and start over as on first
      * launch (a fresh worker, a fresh identity). Instant and offline.
-     * Returns what couldn't be deleted, if anything.
+     * `keep_wallets` keeps the TAO and mailbox accounts. Returns what went
+     * wrong, if anything.
      */
-open func wipe() -> String?  {
+open func wipe(keepWallets: Bool) -> String?  {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
-    uniffi_sanctum_core_fn_method_client_wipe(self.uniffiClonePointer(),$0
+    uniffi_sanctum_core_fn_method_client_wipe(self.uniffiClonePointer(),
+        FfiConverterBool.lower(keepWallets),$0
     )
 })
 }
@@ -3241,7 +3244,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sanctum_core_checksum_method_client_unsend() != 64185) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_sanctum_core_checksum_method_client_wipe() != 39090) {
+    if (uniffi_sanctum_core_checksum_method_client_wipe() != 31486) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_constructor_client_new() != 54907) {

@@ -345,6 +345,36 @@ impl Mailbox {
     }
 }
 
+/// What survives a "keep wallets" wipe: the TAO accounts, cheques still in
+/// flight (they hold nonces later sends must not reuse) minus which chat
+/// they went to, and the mailbox account. Nothing that says who you talked to.
+pub(crate) struct Money {
+    wallet: Option<String>,
+    mailbox: Option<String>,
+}
+
+pub(crate) fn take_money(store: &Store) -> Money {
+    let mut w = Wallet::load(store);
+    for c in &mut w.issued {
+        c.contact_id = 0;
+        c.wire_id.clear();
+    }
+    Money {
+        wallet: (!w.accounts.is_empty()).then(|| serde_json::to_string(&w).ok()).flatten(),
+        mailbox: store.kv_get(MAILBOX_KEY),
+    }
+}
+
+pub(crate) fn put_money(store: &Store, m: &Money) -> Result<(), crate::Error> {
+    if let Some(w) = &m.wallet {
+        store.kv_set(WALLET_KEY, w)?;
+    }
+    if let Some(b) = &m.mailbox {
+        store.kv_set(MAILBOX_KEY, b)?;
+    }
+    Ok(())
+}
+
 fn has_token() -> bool {
     crate::demo::Settings::load().hippius_api_token.is_some()
 }

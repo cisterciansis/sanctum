@@ -464,7 +464,7 @@ void uniffi_sanctum_core_fn_method_client_unsend(void*_Nonnull ptr, int64_t cont
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_WIPE
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_WIPE
-RustBuffer uniffi_sanctum_core_fn_method_client_wipe(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_sanctum_core_fn_method_client_wipe(void*_Nonnull ptr, int8_t keep_wallets, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_CASHU_BEARER_WARNING

@@ -14,14 +14,21 @@ fn keychain(name: &str) -> Result<keyring::Entry, Error> {
 
 /// Dev mode: DB key in a 0600 file so unsigned rebuilds don't re-prompt.
 /// Migrates the existing keychain key on first use (one last prompt).
-fn dev_keyfile_secret(dir: &str) -> Result<String, Error> {
+fn dev_keyfile_secret(dir: &str, new_db: bool) -> Result<String, Error> {
     use std::os::unix::fs::PermissionsExt;
     let path = format!("{dir}/db.key");
     if let Ok(s) = std::fs::read_to_string(&path) {
         return Ok(s.trim().to_string());
     }
-    // Preserve the key an existing database was encrypted with.
-    let key = keychain_secret("db-key")?;
+    // Preserve the key an existing database was encrypted with; a new
+    // database (first launch, or right after a wipe) gets a fresh one.
+    let key = if !new_db {
+        keychain_secret("db-key")?
+    } else {
+        let mut bytes = [0u8; 32];
+        rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut bytes);
+        B64.encode(bytes)
+    };
     std::fs::write(&path, &key).map_err(|e| Error::Crypto(e.to_string()))?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
         .map_err(|e| Error::Crypto(e.to_string()))?;
@@ -123,10 +130,11 @@ impl Store {
     pub fn open() -> Result<Self, Error> {
         let dir = crate::data_dir().ok_or_else(|| Error::Crypto("no HOME".into()))?;
         std::fs::create_dir_all(&dir).map_err(|e| Error::Crypto(e.to_string()))?;
+        let new_db = !std::path::Path::new(&format!("{dir}/sanctum.db")).exists();
         let conn = Connection::open(format!("{dir}/sanctum.db"))
             .map_err(|e| Error::Crypto(e.to_string()))?;
         let key = if crate::demo::Settings::load().dev_keyfile {
-            dev_keyfile_secret(&dir)?
+            dev_keyfile_secret(&dir, new_db)?
         } else {
             keychain_secret("db-key")?
         };

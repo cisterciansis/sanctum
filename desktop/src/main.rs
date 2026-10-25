@@ -349,7 +349,8 @@ struct ChatApp {
     inviting: bool,
     joining: bool,
     /// Armed by the first click on Emergency wipe.
-    confirm_wipe: bool,
+    /// Wipe armed by a first click: Some(keep_wallets).
+    confirm_wipe: Option<bool>,
     /// The one open popup menu, and where it was opened (window coords).
     menu: Option<Menu>,
     menu_at: Point<Pixels>,
@@ -446,7 +447,7 @@ impl ChatApp {
             group_size: 3,
             inviting: false,
             joining: false,
-            confirm_wipe: false,
+            confirm_wipe: None,
             menu: None,
             menu_at: Point::default(),
             copied_at: None,
@@ -628,8 +629,16 @@ impl ChatApp {
     }
 
     /// Emergency wipe, then start over as on first launch with a new worker.
-    fn wipe(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let result = contact::wipe();
+    fn wipe(&mut self, keep_wallets: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let result = match contact::wipe(keep_wallets) {
+            Ok(problem) => problem,
+            Err(e) => {
+                // Nothing was erased.
+                self.confirm_wipe = None;
+                self.status = format!("error: {e}").into();
+                return;
+            }
+        };
         let (out_tx, out_rx) = std::sync::mpsc::channel();
         let (ev_tx, ev_rx) = std::sync::mpsc::channel();
         spawn_worker(out_rx, ev_tx);
@@ -644,14 +653,15 @@ impl ChatApp {
         tint(self.settings.accent, cx);
         self.input_state.update(cx, |s, cx| s.set_value("", window, cx));
         self.draft_empty = true;
-        self.confirm_wipe = false;
+        self.confirm_wipe = None;
         self.show_settings = false;
         self.show_chat_info = false;
         self.menu = None;
         (self.inviting, self.joining) = (false, false);
         self.status = match result {
-            Ok(()) => "wiped".into(),
-            Err(e) => format!("error: wipe incomplete: {e}").into(),
+            None if keep_wallets => "wiped; your wallets were kept".into(),
+            None => "wiped".into(),
+            Some(e) => format!("error: {e}").into(),
         };
     }
 
@@ -1482,7 +1492,7 @@ impl ChatApp {
             .on_click(cx.listener(|this, _, _, cx| {
                 this.show_settings = !this.show_settings;
                 this.show_chat_info = false;
-                this.confirm_wipe = false;
+                this.confirm_wipe = None;
                 cx.notify();
             }))
             .child(
@@ -1569,7 +1579,7 @@ impl Render for ChatApp {
                 Button::new("panel-done").ghost().label("Done").on_click(cx.listener(|this, _, _, cx| {
                     this.show_settings = false;
                     this.show_chat_info = false;
-                    this.confirm_wipe = false;
+                    this.confirm_wipe = None;
                     cx.notify();
                 }))
             } else {
@@ -1672,16 +1682,20 @@ impl Render for ChatApp {
                 );
             }
 
-            let wipe = pill("wipe", if self.confirm_wipe { "Click again to erase everything" } else { "Wipe…" }, 0xFF453A)
-                .when(self.confirm_wipe, |d| d.bg(rgb(0xFF453A)).text_color(rgb(0xFFFFFF)))
-                .on_click(cx.listener(|this, _, window, cx| {
-                    if this.confirm_wipe {
-                        this.wipe(window, cx);
-                    } else {
-                        this.confirm_wipe = true;
-                    }
-                    cx.notify();
-                }));
+            let wipe = |id: &'static str, keep: bool| {
+                let armed = self.confirm_wipe == Some(keep);
+                pill(id, if armed { "Click again to erase" } else { "Erase…" }, 0xFF453A)
+                    .when(armed, |d| d.bg(rgb(0xFF453A)).text_color(rgb(0xFFFFFF)))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if this.confirm_wipe == Some(keep) {
+                            this.wipe(keep, window, cx);
+                        } else {
+                            this.confirm_wipe = Some(keep);
+                        }
+                        cx.notify();
+                    }))
+            };
+            let (wipe_keep, wipe_all) = (wipe("wipe-keep", true), wipe("wipe-all", false));
 
             let mailbox = self.mailbox_rows(&p, cx);
             pane(vec![
@@ -1723,9 +1737,12 @@ impl Render for ChatApp {
                     .into_any_element(),
                 ]),
                 section(&p, "TAO wallet", vec![self.wallet_section(&p, cx).into_any_element()]),
-                section(&p, "Danger zone", vec![
-                    row("Emergency wipe", Some("erase every chat, key and setting on this device · offline, instant"))
-                        .child(wipe)
+                section(&p, "Emergency wipe · offline, instant", vec![
+                    row("Erase chats, keep wallets", Some("every chat, contact, key, file and setting goes; your TAO and mailbox accounts stay, so no money is lost"))
+                        .child(wipe_keep)
+                        .into_any_element(),
+                    row("Erase everything", Some("every trace of Sanctum on this device, wallets included: funds are gone unless you saved the recovery phrases"))
+                        .child(wipe_all)
                         .into_any_element(),
                 ]),
                 footer(),

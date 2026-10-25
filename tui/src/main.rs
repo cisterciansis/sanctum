@@ -185,7 +185,8 @@ const COMMANDS: &[(&str, &str)] = &[
     ("/verify, /unverify", "mark this chat's safety number checked"),
     ("/block, /unblock", "drop their messages unseen (kept on this device)"),
     ("/fav", "pin this chat to the top"),
-    ("/wipe", "erase everything on this device (asks to confirm)"),
+    ("/wipe keep", "erase everything but your TAO and mailbox accounts (asks to confirm)"),
+    ("/wipe", "erase everything, wallets included (asks to confirm)"),
 ];
 
 /// One transcript row: a line of text, or an inline image preview.
@@ -312,7 +313,8 @@ struct App {
     /// Chat armed by a first `/delete`; a second one confirms.
     pending_delete: Option<i64>,
     /// Armed by a first `/wipe`.
-    pending_wipe: bool,
+    /// Wipe armed by a first `/wipe`: Some(keep_wallets).
+    pending_wipe: Option<bool>,
     /// The selected chat's safety number is on screen (`/safety`).
     show_safety: bool,
     input: String,
@@ -351,7 +353,7 @@ impl App {
             react_mode: false,
             inviting: false,
             pending_delete: None,
-            pending_wipe: false,
+            pending_wipe: None,
             show_safety: false,
             focused: true,
             input: String::new(),
@@ -498,16 +500,24 @@ impl App {
             self.input.clear();
             return;
         }
-        // Erasing everything takes two, like /delete.
-        if std::mem::take(&mut self.pending_wipe) && text == "/wipe" {
-            self.wipe();
-            self.input.clear();
-            return;
-        }
-        if text == "/wipe" {
-            self.pending_wipe = true;
-            self.status =
-                "ERASE EVERYTHING on this device (chats, keys, settings)? /wipe again to confirm".into();
+        // Erasing takes two of the same, like /delete.
+        let keep = match text.as_str() {
+            "/wipe" => Some(false),
+            "/wipe keep" => Some(true),
+            _ => None,
+        };
+        if let Some(keep) = keep {
+            if self.pending_wipe.take() == Some(keep) {
+                self.wipe(keep);
+            } else {
+                self.pending_wipe = Some(keep);
+                self.status = if keep {
+                    "ERASE chats, contacts, keys, files and settings, keeping your TAO and mailbox accounts? /wipe keep again to confirm"
+                } else {
+                    "ERASE EVERYTHING, wallets included (funds are gone without their phrases)? /wipe again to confirm"
+                }
+                .into();
+            }
             self.input.clear();
             return;
         }
@@ -902,8 +912,11 @@ impl App {
     }
 
     /// Emergency wipe, then start over as on first launch with a new worker.
-    fn wipe(&mut self) {
-        let result = contact::wipe();
+    fn wipe(&mut self, keep_wallets: bool) {
+        let result = match contact::wipe(keep_wallets) {
+            Ok(problem) => problem,
+            Err(e) => return self.status = format!("error: {e}"), // nothing was erased
+        };
         let (out_tx, out_rx) = std::sync::mpsc::channel();
         let (ev_tx, ev_rx) = std::sync::mpsc::channel();
         spawn_worker(out_rx, ev_tx);
@@ -915,9 +928,12 @@ impl App {
         self.previews.borrow_mut().clear();
         self.show_safety = false;
         self.inviting = false;
+        self.wallet = None;
+        let _ = self.outbound.send(Cmd::Tao(TaoCmd::Refresh));
         self.status = match result {
-            Ok(()) => "wiped: nothing of yours is left on this device".into(),
-            Err(e) => format!("error: wipe incomplete: {e}"),
+            None if keep_wallets => "wiped: only your TAO and mailbox accounts are left".into(),
+            None => "wiped: nothing of yours is left on this device".into(),
+            Some(e) => format!("error: {e}"),
         };
     }
 
@@ -1443,7 +1459,7 @@ impl App {
             self.status = IDLE.into();
             self.pending_delete = None;
             self.pending_tao = None;
-            self.pending_wipe = false;
+            self.pending_wipe = None;
         }
     }
 

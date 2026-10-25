@@ -621,9 +621,30 @@ static ONE_WORKER: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// Emergency wipe (bitchat's triple-tap): retire the running worker, then
 /// delete every local trace. Never touches the network, so it is instant;
 /// spawn a fresh worker afterwards to start over as on first launch.
-pub fn wipe() -> Result<(), String> {
+/// Emergency wipe: everything Sanctum keeps on this device, offline and at
+/// once. With `keep_wallets`, the TAO accounts and the mailbox account (the
+/// things that hold money) come back in a fresh database under a new key;
+/// chats, contacts, identity, files and settings do not.
+///
+/// Err: nothing was erased (the app carries on as it was). Ok(Some): erased,
+/// with a problem worth showing.
+pub fn wipe(keep_wallets: bool) -> Result<Option<String>, String> {
+    // Read what to keep first; if that fails, erase nothing rather than
+    // destroy funds.
+    let kept = if keep_wallets {
+        let store = Store::open().map_err(|e| format!("couldn't read the wallets, so nothing was erased: {e}"))?;
+        let s = crate::demo::Settings::load();
+        Some((crate::wallet::take_money(&store), s.hippius_api_token, s.dev_keyfile))
+    } else {
+        None
+    };
     crate::bump_epoch();
-    crate::store::wipe().map_err(|e| e.to_string())
+    let erased = crate::store::wipe().err().map(|e| format!("wipe incomplete: {e}"));
+    let Some((money, token, dev_keyfile)) = kept else { return Ok(erased) };
+    let s = crate::demo::Settings { hippius_api_token: token, dev_keyfile, ..Default::default() };
+    s.save();
+    let restored = Store::open().and_then(|store| crate::wallet::put_money(&store, &money));
+    Ok(erased.or(restored.err().map(|e| format!("chats erased, but the wallets couldn't be saved back: {e}"))))
 }
 
 /// The contact with its safety number (empty until their key is known).

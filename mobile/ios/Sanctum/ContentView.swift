@@ -340,9 +340,15 @@ struct NewGroupSheet: View {
     }
 }
 
+enum Erase: Identifiable {
+    case keepWallets, everything
+    var id: Self { self }
+}
+
 struct SettingsSheet: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) var dismiss
+    @State private var erase: Erase?
 
     var body: some View {
         NavigationStack {
@@ -420,6 +426,32 @@ struct SettingsSheet: View {
                     ))
                 } footer: {
                     Text("Let people know when you've read their messages. When off, you won't see theirs either.")
+                }
+                Section {
+                    Button("Erase Chats, Keep Wallets", role: .destructive) { erase = .keepWallets }
+                    Button("Erase Everything", role: .destructive) { erase = .everything }
+                } header: {
+                    Text("Emergency wipe")
+                } footer: {
+                    Text("Instant and offline. Triple-tapping the Chats title erases everything too.")
+                }
+                .confirmationDialog(
+                    erase == .everything ? "Erase everything?" : "Erase chats, keep wallets?",
+                    isPresented: Binding(get: { erase != nil }, set: { if !$0 { erase = nil } }),
+                    titleVisibility: .visible,
+                    presenting: erase
+                ) { e in
+                    Button(e == .everything ? "Erase Everything" : "Erase Chats", role: .destructive) {
+                        model.wipe(keepWallets: e == .keepWallets)
+                        dismiss()
+                    }
+                } message: { e in
+                    switch e {
+                    case .keepWallets:
+                        Text("Every chat, contact, key, photo and setting is deleted from this device. Your TAO wallet and mailbox account stay, so no money is lost.")
+                    case .everything:
+                        Text("Every trace of Sanctum on this device is deleted, wallets included. Their funds are gone unless you saved the recovery phrases.")
+                    }
                 }
                 Section {
                 } footer: {
