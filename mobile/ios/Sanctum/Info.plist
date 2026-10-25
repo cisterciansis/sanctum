@@ -31,6 +31,8 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Sanctum uses the camera only to scan a contact's safety-number code.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 </dict>

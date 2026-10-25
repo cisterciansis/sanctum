@@ -1,6 +1,8 @@
 import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
+import CoreImage.CIFilterBuiltins
+import VisionKit
 
 let tapbacks = ["👍", "👎", "❤️", "‼️", "❓", "😂"]
 
@@ -11,11 +13,12 @@ struct ContentView: View {
     @State private var showNewGroup = false
     @State private var renaming: ChatVM?
     @State private var renameText = ""
+    @State private var wipePulse = 0
 
     var body: some View {
         NavigationSplitView {
             List(selection: $model.selected) {
-                ForEach(model.chats) { chat in
+                ForEach(model.listed) { chat in
                     ChatRow(chat: chat)
                         .tag(chat.id)
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -80,7 +83,20 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("Chats")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                // Emergency wipe, as in bitchat: triple-tap the title. No
+                // confirmation by design; it's for when there's no time.
+                ToolbarItem(placement: .principal) {
+                    Text("Chats")
+                        .font(.headline)
+                        .onTapGesture(count: 3) {
+                            model.wipe()
+                            wipePulse += 1
+                        }
+                        .sensoryFeedback(.warning, trigger: wipePulse)
+                        .accessibilityHint("Triple-tap to erase everything on this device")
+                }
                 ToolbarItem(placement: .topBarLeading) {
                     Button { showSettings = true } label: {
                         Image(systemName: "gearshape")
@@ -175,9 +191,17 @@ struct ChatRow: View {
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(chat.name)
+                HStack(spacing: 4) {
+                    if chat.favorite {
+                        Image(systemName: "star.fill").font(.caption2).foregroundStyle(.yellow)
+                    }
+                    Text(chat.name)
+                    if chat.verified {
+                        Image(systemName: "checkmark.seal.fill").font(.caption).foregroundStyle(.green)
+                    }
+                }
                 if let last = chat.msgs.last {
-                    Text(last.text)
+                    Text(last.display ?? last.text)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -188,7 +212,11 @@ struct ChatRow: View {
                 }
             }
             Spacer()
-            if chat.waiting {
+            if chat.keyChanged {
+                Image(systemName: "exclamationmark.shield.fill").foregroundStyle(.red)
+            } else if chat.blocked {
+                Image(systemName: "hand.raised.fill").foregroundStyle(.secondary)
+            } else if chat.waiting {
                 Circle().fill(.quaternary).frame(width: 8, height: 8)
             } else if chat.unread > 0 {
                 Text("\(chat.unread)")
@@ -406,6 +434,8 @@ struct ChatView: View {
     @State private var showCustomTimer = false
     @State private var customTimer = ""
     @State private var timerInvalid = false
+    @State private var showSafety = false
+    @State private var sendError: String?
 
     @State private var reveal: CGFloat = 0
     /// The end-of-list marker is on screen, so new messages may scroll in.
@@ -453,6 +483,9 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if chat.keyChanged {
+                KeyChangedBanner { showSafety = true }
+            }
             if !chat.openInvites.isEmpty {
                 InviteBanner(seats: chat.openInvites, isGroup: chat.isGroupInvite)
             }
@@ -593,9 +626,12 @@ struct ChatView: View {
                             .strokeBorder(Color(.systemGray4))
                     )
                 Button {
-                    model.send(draft)
-                    draft = ""
-                    sendPulse += 1
+                    if let error = model.send(draft) {
+                        sendError = error
+                    } else {
+                        draft = ""
+                        sendPulse += 1
+                    }
                 } label: {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 15, weight: .bold))
@@ -644,6 +680,19 @@ struct ChatView: View {
                     }
                     if chat.id >= 0 {
                         timerMenu
+                        Button { showSafety = true } label: {
+                            Label(
+                                chat.verified ? "Safety Number (Verified)" : "Verify Safety Number",
+                                systemImage: chat.verified ? "checkmark.shield.fill" : "checkmark.shield"
+                            )
+                        }
+                        Button { model.setFavorite(chat.id, !chat.favorite) } label: {
+                            Label(chat.favorite ? "Unfavorite" : "Favorite",
+                                  systemImage: chat.favorite ? "star.slash" : "star")
+                        }
+                        Button { model.setBlocked(chat.id, !chat.blocked) } label: {
+                            Label(chat.blocked ? "Unblock" : "Block", systemImage: "hand.raised")
+                        }
                     }
                     Button {
                         model.clearHistory(chat.id, olderThanSecs: nil)
@@ -669,6 +718,7 @@ struct ChatView: View {
         .modifier(CustomTimerAlerts(
             show: $showCustomTimer, text: $customTimer, invalid: $timerInvalid
         ) { model.setDisappear($0) })
+        .modifier(ChatSheets(chatId: chat.id, showSafety: $showSafety, sendError: $sendError))
         .onAppear { model.markRead(chat.id) }
     }
 }
@@ -703,6 +753,231 @@ struct CustomTimerAlerts: ViewModifier {
             } message: {
                 Text("Use off, or 1 minute to 1 year, like 90m, 36h, 2w, 6mo or 1y.")
             }
+    }
+}
+
+/// Safety-number sheet and the `/pay` error, kept out of ChatView's body for
+/// the type checker's sake.
+struct ChatSheets: ViewModifier {
+    let chatId: Int64
+    @Binding var showSafety: Bool
+    @Binding var sendError: String?
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(isPresented: $showSafety) { SafetySheet(chatId: chatId) }
+            .alert("Not sent", isPresented: Binding(
+                get: { sendError != nil },
+                set: { if !$0 { sendError = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(sendError ?? "")
+            }
+    }
+}
+
+struct KeyChangedBanner: View {
+    let verify: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label("Identity key changed", systemImage: "exclamationmark.shield.fill")
+                .font(.subheadline.bold())
+                .foregroundStyle(.red)
+            Text("Someone wrote to this chat under a different identity key. It was refused. Compare safety numbers in person.")
+                .font(.caption)
+            Button("Verify Safety Number", action: verify).font(.caption.bold())
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.red.opacity(0.1))
+    }
+}
+
+/// QR payload: both phones compute the same digits, so either can scan the other.
+private func safetyQR(_ safety: String) -> String { "sanctum-safety:" + safety.filter(\.isNumber) }
+
+struct SafetySheet: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.dismiss) var dismiss
+    let chatId: Int64
+    @State private var scanning = false
+    @State private var scanResult: Bool?
+
+    var body: some View {
+        let chat = model.chats.first { $0.id == chatId }
+        let safety = chat?.safety ?? ""
+        NavigationStack {
+            Form {
+                if safety.isEmpty {
+                    Text("The safety number appears once they've joined.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Section {
+                        if let qr = qrImage(safetyQR(safety)) {
+                            Image(uiImage: qr)
+                                .interpolation(.none)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(maxWidth: 220)
+                                .frame(maxWidth: .infinity)
+                        }
+                        Text(safety)
+                            .font(.system(.title3, design: .monospaced))
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity)
+                            .textSelection(.enabled)
+                    } footer: {
+                        Text("Together in person, scan their code or compare these digits with their screen. If they match, nobody is in the middle.")
+                    }
+                    Section {
+                        if DataScannerViewController.isSupported {
+                            Button {
+                                scanResult = nil
+                                scanning = true
+                            } label: {
+                                Label("Scan Their Code", systemImage: "qrcode.viewfinder")
+                            }
+                        }
+                        if let ok = scanResult {
+                            Label(ok ? "Numbers match. Marked verified." : "Numbers don't match. This may not be your contact.",
+                                  systemImage: ok ? "checkmark.seal.fill" : "xmark.octagon.fill")
+                                .foregroundStyle(ok ? .green : .red)
+                        }
+                        Toggle("Verified", isOn: Binding(
+                            get: { chat?.verified ?? false },
+                            set: { model.setVerified(chatId, $0) }
+                        ))
+                    } footer: {
+                        Text("Kept on this device only.")
+                    }
+                }
+            }
+            .navigationTitle("Safety Number")
+            .navigationBarTitleDisplayMode(.inline)
+            .preferredColorScheme(model.colorScheme)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .sheet(isPresented: $scanning) {
+                QRScanner { code in
+                    scanning = false
+                    let ok = code == safetyQR(safety)
+                    scanResult = ok
+                    if ok { model.setVerified(chatId, true) }
+                }
+                .ignoresSafeArea()
+            }
+            .sensoryFeedback(trigger: scanResult) { _, new in
+                new.map { $0 ? .success : .error }
+            }
+        }
+    }
+}
+
+func qrImage(_ text: String) -> UIImage? {
+    let filter = CIFilter.qrCodeGenerator()
+    filter.message = Data(text.utf8)
+    filter.correctionLevel = "M"
+    guard let out = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 8, y: 8)),
+          let cg = CIContext().createCGImage(out, from: out.extent) else { return nil }
+    return UIImage(cgImage: cg)
+}
+
+/// Live camera QR reader (VisionKit); reports the first code it sees.
+struct QRScanner: UIViewControllerRepresentable {
+    let onScan: (String) -> Void
+
+    func makeUIViewController(context: Context) -> DataScannerViewController {
+        let vc = DataScannerViewController(
+            recognizedDataTypes: [.barcode(symbologies: [.qr])],
+            isHighlightingEnabled: true
+        )
+        vc.delegate = context.coordinator
+        try? vc.startScanning()
+        return vc
+    }
+
+    func updateUIViewController(_ vc: DataScannerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(onScan: onScan) }
+
+    final class Coordinator: NSObject, DataScannerViewControllerDelegate {
+        let onScan: (String) -> Void
+        private var done = false
+
+        init(onScan: @escaping (String) -> Void) { self.onScan = onScan }
+
+        func dataScanner(_ scanner: DataScannerViewController, didAdd items: [RecognizedItem],
+                         allItems: [RecognizedItem]) {
+            for case .barcode(let code) in items {
+                if let value = code.payloadStringValue, !done {
+                    done = true
+                    onScan(value)
+                }
+            }
+        }
+    }
+}
+
+/// A Cashu token or a lightning:/bitcoin: link, handed to an external
+/// wallet on tap; long-press copies it. Sanctum holds no Bitcoin keys.
+struct PayChip: View {
+    let link: PayLink
+    let mine: Bool
+    @Environment(\.openURL) private var openURL
+    @State private var noWallet = false
+
+    private var icon: String {
+        switch link.kind {
+        case .cashu: "banknote"
+        case .lightning: "bolt.fill"
+        case .bitcoin: "bitcoinsign.circle"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: mine ? .trailing : .leading, spacing: 3) {
+            Button {
+                if let url = URL(string: link.uri) {
+                    openURL(url) { accepted in noWallet = !accepted }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: icon).foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(link.label).font(.footnote.weight(.semibold))
+                        if let memo = link.memo {
+                            Text(memo).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
+                }
+                .padding(.vertical, 6)
+                .padding(.horizontal, 12)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Color(.secondarySystemBackground)))
+                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color(.separator)))
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+                Button {
+                    UIPasteboard.general.string = link.raw
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
+            }
+            if link.kind == .cashu {
+                Text(bearerWarning).font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .alert("No wallet app", isPresented: $noWallet) {
+            Button("Copy") { UIPasteboard.general.string = link.raw }
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Nothing on this phone opens this link. Copy it into your wallet instead.")
+        }
     }
 }
 
@@ -874,6 +1149,7 @@ struct Bubble: View {
                             Label("Delete for Me", systemImage: "trash")
                         }
                     }
+                ForEach(msg.pay, id: \.raw) { PayChip(link: $0, mine: msg.mine) }
                 HStack(spacing: 4) {
                     if let r = msg.reaction { Text(r).font(.caption) }
                     if msg.mine && msg.failed {
@@ -895,7 +1171,7 @@ struct Bubble: View {
 
     @ViewBuilder
     private var bubbleContent: some View {
-        if let card = msg.pay {
+        if let card = msg.tao {
             PayCardView(chatId: chatId, wireId: msg.id, mine: msg.mine, card: card)
         } else if let stored = msg.filePath, let path = resolveFile(stored),
            let ui = UIImage(contentsOfFile: path) {
@@ -914,7 +1190,7 @@ struct Bubble: View {
                 )
                 .foregroundStyle(msg.mine ? .white : .primary)
         } else {
-            Text(msg.text)
+            Text(msg.display ?? msg.text)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 7)
                 .background(

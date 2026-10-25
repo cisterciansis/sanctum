@@ -551,7 +551,13 @@ public protocol ClientProtocol: AnyObject, Sendable {
      */
     func setApiToken(token: String) 
     
+    func setBlocked(contactId: Int64, on: Bool) 
+    
+    func setFavorite(contactId: Int64, on: Bool) 
+    
     func setTimer(contactId: Int64, secs: UInt64) 
+    
+    func setVerified(contactId: Int64, on: Bool) 
     
     /**
      * History captured with the startup snapshot, per chat.
@@ -595,6 +601,13 @@ public protocol ClientProtocol: AnyObject, Sendable {
     func taoWatch(name: String, address: String) 
     
     func unsend(contactId: Int64, wireId: String) 
+    
+    /**
+     * Emergency wipe: delete all local data and start over as on first
+     * launch (a fresh worker, a fresh identity). Instant and offline.
+     * Returns what couldn't be deleted, if anything.
+     */
+    func wipe()  -> String?
     
 }
 open class Client: ClientProtocol, @unchecked Sendable {
@@ -800,10 +813,34 @@ open func setApiToken(token: String)  {try! rustCall() {
 }
 }
     
+open func setBlocked(contactId: Int64, on: Bool)  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_set_blocked(self.uniffiClonePointer(),
+        FfiConverterInt64.lower(contactId),
+        FfiConverterBool.lower(on),$0
+    )
+}
+}
+    
+open func setFavorite(contactId: Int64, on: Bool)  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_set_favorite(self.uniffiClonePointer(),
+        FfiConverterInt64.lower(contactId),
+        FfiConverterBool.lower(on),$0
+    )
+}
+}
+    
 open func setTimer(contactId: Int64, secs: UInt64)  {try! rustCall() {
     uniffi_sanctum_core_fn_method_client_set_timer(self.uniffiClonePointer(),
         FfiConverterInt64.lower(contactId),
         FfiConverterUInt64.lower(secs),$0
+    )
+}
+}
+    
+open func setVerified(contactId: Int64, on: Bool)  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_set_verified(self.uniffiClonePointer(),
+        FfiConverterInt64.lower(contactId),
+        FfiConverterBool.lower(on),$0
     )
 }
 }
@@ -939,6 +976,18 @@ open func unsend(contactId: Int64, wireId: String)  {try! rustCall() {
 }
 }
     
+    /**
+     * Emergency wipe: delete all local data and start over as on first
+     * launch (a fresh worker, a fresh identity). Instant and offline.
+     * Returns what couldn't be deleted, if anything.
+     */
+open func wipe() -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_wipe(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
 
 }
 
@@ -1000,14 +1049,38 @@ public struct FfiContact {
     public var name: String
     public var waiting: Bool
     public var inviteLink: String
+    public var verified: Bool
+    public var blocked: Bool
+    public var favorite: Bool
+    /**
+     * Someone wrote under a different identity key (refused); cleared by
+     * verifying again.
+     */
+    public var keyChanged: Bool
+    /**
+     * "12345 67890 …" (12 groups of 5); empty until the peer joins.
+     */
+    public var safety: String
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: Int64, name: String, waiting: Bool, inviteLink: String) {
+    public init(id: Int64, name: String, waiting: Bool, inviteLink: String, verified: Bool, blocked: Bool, favorite: Bool, 
+        /**
+         * Someone wrote under a different identity key (refused); cleared by
+         * verifying again.
+         */keyChanged: Bool, 
+        /**
+         * "12345 67890 …" (12 groups of 5); empty until the peer joins.
+         */safety: String) {
         self.id = id
         self.name = name
         self.waiting = waiting
         self.inviteLink = inviteLink
+        self.verified = verified
+        self.blocked = blocked
+        self.favorite = favorite
+        self.keyChanged = keyChanged
+        self.safety = safety
     }
 }
 
@@ -1030,6 +1103,21 @@ extension FfiContact: Equatable, Hashable {
         if lhs.inviteLink != rhs.inviteLink {
             return false
         }
+        if lhs.verified != rhs.verified {
+            return false
+        }
+        if lhs.blocked != rhs.blocked {
+            return false
+        }
+        if lhs.favorite != rhs.favorite {
+            return false
+        }
+        if lhs.keyChanged != rhs.keyChanged {
+            return false
+        }
+        if lhs.safety != rhs.safety {
+            return false
+        }
         return true
     }
 
@@ -1038,6 +1126,11 @@ extension FfiContact: Equatable, Hashable {
         hasher.combine(name)
         hasher.combine(waiting)
         hasher.combine(inviteLink)
+        hasher.combine(verified)
+        hasher.combine(blocked)
+        hasher.combine(favorite)
+        hasher.combine(keyChanged)
+        hasher.combine(safety)
     }
 }
 
@@ -1053,7 +1146,12 @@ public struct FfiConverterTypeFfiContact: FfiConverterRustBuffer {
                 id: FfiConverterInt64.read(from: &buf), 
                 name: FfiConverterString.read(from: &buf), 
                 waiting: FfiConverterBool.read(from: &buf), 
-                inviteLink: FfiConverterString.read(from: &buf)
+                inviteLink: FfiConverterString.read(from: &buf), 
+                verified: FfiConverterBool.read(from: &buf), 
+                blocked: FfiConverterBool.read(from: &buf), 
+                favorite: FfiConverterBool.read(from: &buf), 
+                keyChanged: FfiConverterBool.read(from: &buf), 
+                safety: FfiConverterString.read(from: &buf)
         )
     }
 
@@ -1062,6 +1160,11 @@ public struct FfiConverterTypeFfiContact: FfiConverterRustBuffer {
         FfiConverterString.write(value.name, into: &buf)
         FfiConverterBool.write(value.waiting, into: &buf)
         FfiConverterString.write(value.inviteLink, into: &buf)
+        FfiConverterBool.write(value.verified, into: &buf)
+        FfiConverterBool.write(value.blocked, into: &buf)
+        FfiConverterBool.write(value.favorite, into: &buf)
+        FfiConverterBool.write(value.keyChanged, into: &buf)
+        FfiConverterString.write(value.safety, into: &buf)
     }
 }
 
@@ -1723,6 +1826,194 @@ public func FfiConverterTypeFfiWallet_lower(_ value: FfiWallet) -> RustBuffer {
     return FfiConverterTypeFfiWallet.lower(value)
 }
 
+
+public struct PayLink {
+    public var kind: PayKind
+    /**
+     * cashu:, lightning: or bitcoin: URI for an external wallet, rebuilt
+     * from validated parts only.
+     */
+    public var uri: String
+    /**
+     * The bare token, invoice or address, for copying.
+     */
+    public var raw: String
+    /**
+     * "500 sat · mint.example.com", "Lightning invoice · 2500 sat"…
+     */
+    public var label: String
+    public var memo: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(kind: PayKind, 
+        /**
+         * cashu:, lightning: or bitcoin: URI for an external wallet, rebuilt
+         * from validated parts only.
+         */uri: String, 
+        /**
+         * The bare token, invoice or address, for copying.
+         */raw: String, 
+        /**
+         * "500 sat · mint.example.com", "Lightning invoice · 2500 sat"…
+         */label: String, memo: String?) {
+        self.kind = kind
+        self.uri = uri
+        self.raw = raw
+        self.label = label
+        self.memo = memo
+    }
+}
+
+#if compiler(>=6)
+extension PayLink: Sendable {}
+#endif
+
+
+extension PayLink: Equatable, Hashable {
+    public static func ==(lhs: PayLink, rhs: PayLink) -> Bool {
+        if lhs.kind != rhs.kind {
+            return false
+        }
+        if lhs.uri != rhs.uri {
+            return false
+        }
+        if lhs.raw != rhs.raw {
+            return false
+        }
+        if lhs.label != rhs.label {
+            return false
+        }
+        if lhs.memo != rhs.memo {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(kind)
+        hasher.combine(uri)
+        hasher.combine(raw)
+        hasher.combine(label)
+        hasher.combine(memo)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePayLink: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PayLink {
+        return
+            try PayLink(
+                kind: FfiConverterTypePayKind.read(from: &buf), 
+                uri: FfiConverterString.read(from: &buf), 
+                raw: FfiConverterString.read(from: &buf), 
+                label: FfiConverterString.read(from: &buf), 
+                memo: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: PayLink, into buf: inout [UInt8]) {
+        FfiConverterTypePayKind.write(value.kind, into: &buf)
+        FfiConverterString.write(value.uri, into: &buf)
+        FfiConverterString.write(value.raw, into: &buf)
+        FfiConverterString.write(value.label, into: &buf)
+        FfiConverterOptionString.write(value.memo, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePayLink_lift(_ buf: RustBuffer) throws -> PayLink {
+    return try FfiConverterTypePayLink.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePayLink_lower(_ value: PayLink) -> RustBuffer {
+    return FfiConverterTypePayLink.lower(value)
+}
+
+
+/**
+ * A message's payment links, plus its text with long ones shortened (the
+ * chip shows them; a 2 KB token is just noise in a bubble).
+ */
+public struct Payments {
+    public var text: String
+    public var links: [PayLink]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(text: String, links: [PayLink]) {
+        self.text = text
+        self.links = links
+    }
+}
+
+#if compiler(>=6)
+extension Payments: Sendable {}
+#endif
+
+
+extension Payments: Equatable, Hashable {
+    public static func ==(lhs: Payments, rhs: Payments) -> Bool {
+        if lhs.text != rhs.text {
+            return false
+        }
+        if lhs.links != rhs.links {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(text)
+        hasher.combine(links)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePayments: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Payments {
+        return
+            try Payments(
+                text: FfiConverterString.read(from: &buf), 
+                links: FfiConverterSequenceTypePayLink.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: Payments, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.text, into: &buf)
+        FfiConverterSequenceTypePayLink.write(value.links, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePayments_lift(_ buf: RustBuffer) throws -> Payments {
+    return try FfiConverterTypePayments.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePayments_lower(_ value: Payments) -> RustBuffer {
+    return FfiConverterTypePayments.lower(value)
+}
+
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
@@ -1961,6 +2252,83 @@ public func FfiConverterTypeFfiEvent_lower(_ value: FfiEvent) -> RustBuffer {
 
 
 extension FfiEvent: Equatable, Hashable {}
+
+
+
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum PayKind {
+    
+    case cashu
+    case lightning
+    case bitcoin
+}
+
+
+#if compiler(>=6)
+extension PayKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePayKind: FfiConverterRustBuffer {
+    typealias SwiftType = PayKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PayKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .cashu
+        
+        case 2: return .lightning
+        
+        case 3: return .bitcoin
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: PayKind, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .cashu:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .lightning:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .bitcoin:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePayKind_lift(_ buf: RustBuffer) throws -> PayKind {
+    return try FfiConverterTypePayKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePayKind_lower(_ value: PayKind) -> RustBuffer {
+    return FfiConverterTypePayKind.lower(value)
+}
+
+
+extension PayKind: Equatable, Hashable {}
 
 
 
@@ -2215,6 +2583,31 @@ fileprivate struct FfiConverterSequenceTypeFfiTaoAccount: FfiConverterRustBuffer
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypePayLink: FfiConverterRustBuffer {
+    typealias SwiftType = [PayLink]
+
+    public static func write(_ value: [PayLink], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypePayLink.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [PayLink] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [PayLink]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypePayLink.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeFfiEvent: FfiConverterRustBuffer {
     typealias SwiftType = [FfiEvent]
 
@@ -2235,6 +2628,12 @@ fileprivate struct FfiConverterSequenceTypeFfiEvent: FfiConverterRustBuffer {
         }
         return seq
     }
+}
+public func cashuBearerWarning() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_sanctum_core_fn_func_cashu_bearer_warning($0
+    )
+})
 }
 public func disappearLabel(secs: UInt64) -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
@@ -2258,6 +2657,28 @@ public func disappearPresets() -> [UInt64]  {
 public func parseDisappear(input: String) -> UInt64?  {
     return try!  FfiConverterOptionUInt64.lift(try! rustCall() {
     uniffi_sanctum_core_fn_func_parse_disappear(
+        FfiConverterString.lower(input),$0
+    )
+})
+}
+/**
+ * A message's payment chips (Cashu, lightning:, bitcoin:, BOLT11) and its
+ * text with long payment strings shortened.
+ */
+public func payScan(text: String) -> Payments  {
+    return try!  FfiConverterTypePayments_lift(try! rustCall() {
+    uniffi_sanctum_core_fn_func_pay_scan(
+        FfiConverterString.lower(text),$0
+    )
+})
+}
+/**
+ * `/pay <token>`: the bare Cashu token to send, or None if it isn't a
+ * cleanly decoding token with a positive amount.
+ */
+public func payToken(input: String) -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+    uniffi_sanctum_core_fn_func_pay_token(
         FfiConverterString.lower(input),$0
     )
 })
@@ -2307,6 +2728,9 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
+    if (uniffi_sanctum_core_checksum_func_cashu_bearer_warning() != 27951) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sanctum_core_checksum_func_disappear_label() != 51845) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2314,6 +2738,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_func_parse_disappear() != 6956) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_func_pay_scan() != 59953) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_func_pay_token() != 42969) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_func_tao_parse_amount() != 9029) {
@@ -2373,7 +2803,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sanctum_core_checksum_method_client_set_api_token() != 12940) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sanctum_core_checksum_method_client_set_blocked() != 47928) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_set_favorite() != 59446) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sanctum_core_checksum_method_client_set_timer() != 12823) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_set_verified() != 53193) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_method_client_snapshot_messages() != 34242) {
@@ -2419,6 +2858,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_method_client_unsend() != 64185) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_wipe() != 39090) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_constructor_client_new() != 54907) {

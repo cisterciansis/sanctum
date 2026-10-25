@@ -28,6 +28,34 @@ struct ChatVM: Identifiable {
     var inviteLink: String
     var msgs: [MsgVM]
     var unread: Int
+    var verified = false
+    var blocked = false
+    var favorite = false
+    /// Someone wrote under a different identity key (refused).
+    var keyChanged = false
+    /// "12345 67890 …"; empty until the peer joins (and for groups).
+    var safety = ""
+
+    init(_ c: FfiContact, msgs: [MsgVM]) {
+        id = c.id
+        name = c.name
+        waiting = c.waiting
+        inviteLink = c.inviteLink
+        self.msgs = msgs
+        unread = 0
+        sync(c)
+    }
+
+    /// Take the core's view of everything but the name (renames are local).
+    mutating func sync(_ c: FfiContact) {
+        waiting = c.waiting
+        inviteLink = c.inviteLink
+        verified = c.verified
+        blocked = c.blocked
+        favorite = c.favorite
+        keyChanged = c.keyChanged
+        safety = c.safety
+    }
 
     /// Seat links still unclaimed (claimed group seats arrive as blank lines,
     /// keeping "Member N" labels stable). Empty once everyone has joined.
@@ -52,24 +80,32 @@ struct MsgVM: Identifiable {
     var reaction: String?
     var text: String
     /// TAO payment card, if this message is one.
-    var pay: FfiPayCard?
+    var tao: FfiPayCard?
     let filePath: String?
     let senderSeat: Int64?
     let ts: Date
+    /// Payment chips, and the text with long payment strings shortened.
+    var pay: [PayLink] = []
+    var display: String?
 }
 
+let bearerWarning = cashuBearerWarning()
+
 func toVM(_ m: FfiMsg) -> MsgVM {
-    MsgVM(
+    let scanned = m.filePath == nil ? payScan(text: m.text) : Payments(text: m.text, links: [])
+    return MsgVM(
         id: m.wireId,
         mine: m.mine,
         delivered: m.delivered,
         readAt: m.mine ? m.readMs.map { Date(timeIntervalSince1970: Double($0) / 1000.0) } : nil,
         reaction: m.reaction,
         text: m.text,
-        pay: m.pay,
+        tao: m.pay,
         filePath: m.filePath,
         senderSeat: m.senderSeat,
-        ts: Date(timeIntervalSince1970: Double(m.tsMs) / 1000.0)
+        ts: Date(timeIntervalSince1970: Double(m.tsMs) / 1000.0),
+        pay: scanned.links,
+        display: scanned.text
     )
 }
 
@@ -121,28 +157,15 @@ final class AppModel: ObservableObject {
             switch ev {
             case .snapshot(let list):
                 chats = list.map { c in
-                    ChatVM(
-                        id: c.id,
-                        name: c.name,
-                        waiting: c.waiting,
-                        inviteLink: c.inviteLink,
-                        msgs: client.snapshotMessages(contactId: c.id).map(toVM),
-                        unread: 0
-                    )
+                    ChatVM(c, msgs: client.snapshotMessages(contactId: c.id).map(toVM))
                 }
                 status = "ready"
             case .contactAdded(let c):
                 inviting = false
-                chats.append(ChatVM(
-                    id: c.id, name: c.name, waiting: c.waiting,
-                    inviteLink: c.inviteLink, msgs: [], unread: 0
-                ))
+                chats.append(ChatVM(c, msgs: []))
                 selected = c.id
             case .contactUpdated(let c):
-                if let i = idx(c.id) {
-                    chats[i].waiting = c.waiting
-                    chats[i].inviteLink = c.inviteLink
-                }
+                if let i = idx(c.id) { chats[i].sync(c) }
             case .contactRemoved(let id):
                 chats.removeAll { $0.id == id }
                 if selected == id { selected = nil }
@@ -171,7 +194,7 @@ final class AppModel: ObservableObject {
             case .msgUpdated(let id, let wireId, let text, let pay):
                 if let i = idx(id), let j = chats[i].msgs.firstIndex(where: { $0.id == wireId }) {
                     chats[i].msgs[j].text = text
-                    chats[i].msgs[j].pay = pay
+                    chats[i].msgs[j].tao = pay
                 }
             case .taoWallet(let w):
                 wallet = w
@@ -203,15 +226,62 @@ final class AppModel: ObservableObject {
 
     private func idx(_ id: Int64) -> Int? { chats.firstIndex { $0.id == id } }
 
-    func send(_ text: String) {
-        guard let sel = selected, let i = idx(sel) else { return }
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
-        let wireId = client.send(contactId: sel, text: trimmed)
+    /// The chat list: favorites first, otherwise in order.
+    var listed: [ChatVM] { chats.filter(\.favorite) + chats.filter { !$0.favorite } }
+
+    /// Returns why it wasn't sent (a bad `/pay` token), if it wasn't.
+    func send(_ text: String) -> String? {
+        guard let sel = selected, let i = idx(sel) else { return nil }
+        var body = text.trimmingCharacters(in: .whitespaces)
+        guard !body.isEmpty else { return nil }
+        if body.hasPrefix("/pay ") {
+            guard let token = payToken(input: String(body.dropFirst(5))) else {
+                return "That isn't a valid Cashu token (cashuA… or cashuB…)."
+            }
+            body = token
+        }
+        let wireId = client.send(contactId: sel, text: body)
+        let scanned = payScan(text: body)
         chats[i].msgs.append(MsgVM(
             id: wireId, mine: true, delivered: false, sent: false, reaction: nil,
-            text: trimmed, filePath: nil, senderSeat: nil, ts: Date()
+            text: body, filePath: nil, senderSeat: nil, ts: Date(),
+            pay: scanned.links, display: scanned.text
         ))
+        return nil
+    }
+
+    // Shown at once; the core's ContactUpdated confirms a moment later.
+    func setVerified(_ id: Int64, _ on: Bool) {
+        client.setVerified(contactId: id, on: on)
+        if let i = idx(id) {
+            chats[i].verified = on
+            if on { chats[i].keyChanged = false }
+        }
+    }
+
+    func setBlocked(_ id: Int64, _ on: Bool) {
+        client.setBlocked(contactId: id, on: on)
+        if let i = idx(id) { chats[i].blocked = on }
+    }
+
+    func setFavorite(_ id: Int64, _ on: Bool) {
+        client.setFavorite(contactId: id, on: on)
+        if let i = idx(id) { chats[i].favorite = on }
+    }
+
+    /// Emergency wipe (triple-tap the title): database, keychain key,
+    /// settings, ratchets and files all go, at once and offline, and the
+    /// app is back at first launch.
+    func wipe() {
+        let failed = client.wipe()
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        try? FileManager.default.removeItem(at: docs.appendingPathComponent("attachments"))
+        chats = []
+        selected = nil
+        inviting = false
+        settings = client.getSettings()
+        hasToken = client.hasApiToken()
+        status = failed.map { "error: wipe incomplete: \($0)" } ?? "connecting…"
     }
 
     func sendFile(_ data: Data, suggestedName: String) {
