@@ -8,6 +8,8 @@ use std::sync::Mutex;
 
 use crate::contact::{spawn_worker, Cmd, Event};
 use crate::store::StoredMsg;
+use crate::tao::{self, Net};
+use crate::wallet::{PayCard, TaoCmd, WalletView};
 
 
 
@@ -24,6 +26,89 @@ pub struct FfiMsg {
     pub sender_seat: Option<i64>,
     /// Own messages: when the peer read them (read receipts on).
     pub read_ms: Option<i64>,
+    /// TAO payment card, if this message is one.
+    pub pay: Option<FfiPayCard>,
+}
+
+/// A payment card for display; amounts pre-formatted by the core.
+#[derive(uniffi::Record, Clone)]
+pub struct FfiPayCard {
+    /// "paid" | "request" | "cheque"
+    pub kind: String,
+    /// "sending" | "sent" | "verifying" | "verified" | "unverified" | "failed"
+    /// | "open" | "settled" | "pending" | "cashing" | "cashed" | "bounced"
+    pub status: String,
+    pub testnet: bool,
+    /// "1.5 τ"
+    pub amount: String,
+    pub from: String,
+    pub to: String,
+    pub tx: Option<String>,
+    pub memo: Option<String>,
+    pub note: Option<String>,
+}
+
+fn ffi_card(json: Option<&str>) -> Option<FfiPayCard> {
+    let c = PayCard::parse(json?)?;
+    let word = |v: serde_json::Value| v.as_str().unwrap_or_default().to_string();
+    Some(FfiPayCard {
+        kind: word(serde_json::to_value(c.kind).ok()?),
+        status: word(serde_json::to_value(c.status).ok()?),
+        testnet: c.net == Net::Test,
+        amount: tao::format_tao(c.amount()),
+        from: c.from,
+        to: c.to,
+        tx: c.tx,
+        memo: c.memo,
+        note: c.note,
+    })
+}
+
+#[derive(uniffi::Record, Clone)]
+pub struct FfiTaoAccount {
+    pub name: String,
+    pub address: String,
+    pub watch_only: bool,
+    /// "12.5 τ", or None while unknown.
+    pub balance: Option<String>,
+}
+
+#[derive(uniffi::Record, Clone)]
+pub struct FfiWallet {
+    pub testnet: bool,
+    pub active: Option<String>,
+    pub accounts: Vec<FfiTaoAccount>,
+}
+
+impl From<WalletView> for FfiWallet {
+    fn from(w: WalletView) -> Self {
+        Self {
+            testnet: w.net == Net::Test,
+            active: w.active,
+            accounts: w
+                .accounts
+                .into_iter()
+                .map(|a| FfiTaoAccount {
+                    name: a.name,
+                    address: a.address,
+                    watch_only: a.watch_only,
+                    balance: a.balance.map(tao::format_tao),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// "1.5" → rao as a decimal string, or None if it isn't a valid amount.
+#[uniffi::export]
+pub fn tao_parse_amount(input: String) -> Option<String> {
+    tao::parse_tao(&input).map(|r| r.to_string())
+}
+
+/// A Bittensor (SS58 prefix 42) address with a valid checksum.
+#[uniffi::export]
+pub fn tao_valid_address(input: String) -> bool {
+    tao::parse_address(&input).is_ok()
 }
 
 impl From<StoredMsg> for FfiMsg {
@@ -38,6 +123,7 @@ impl From<StoredMsg> for FfiMsg {
             ts_ms: m.ts_ms,
             sender_seat: m.sender_seat,
             read_ms: m.read_ms,
+            pay: ffi_card(m.pay.as_deref()),
         }
     }
 }
@@ -61,6 +147,9 @@ pub enum FfiEvent {
     Delivered { contact_id: i64, wire_id: String },
     Sent { contact_id: i64, wire_id: String },
     Read { contact_id: i64, wire_ids: Vec<String>, ts_ms: i64 },
+    MsgUpdated { contact_id: i64, wire_id: String, text: String, pay: Option<FfiPayCard> },
+    TaoWallet { wallet: FfiWallet },
+    TaoPhrase { address: String, phrase: String },
     SendFailed { contact_id: i64, wire_id: String, message: String },
     /// Unsent, or deleted here or by the peer: drop it from the view.
     Removed { contact_id: i64, wire_id: String },
@@ -118,6 +207,12 @@ pub fn tor_status() -> Option<FfiTorStatus> {
     #[cfg(not(feature = "tor"))]
     let s = None;
     s.map(|(ready, message)| FfiTorStatus { ready, message })
+}
+
+impl Client {
+    fn tao(&self, cmd: TaoCmd) {
+        let _ = self.outbound.lock().expect("outbound lock").send(Cmd::Tao(cmd));
+    }
 }
 
 #[uniffi::export]
@@ -182,6 +277,14 @@ impl Client {
                 Event::Read { contact_id, wire_ids, ts_ms } => {
                     FfiEvent::Read { contact_id, wire_ids, ts_ms }
                 }
+                Event::MsgUpdated { contact_id, wire_id, text, pay } => FfiEvent::MsgUpdated {
+                    contact_id,
+                    wire_id,
+                    text,
+                    pay: ffi_card(pay.as_deref()),
+                },
+                Event::TaoWallet(w) => FfiEvent::TaoWallet { wallet: w.into() },
+                Event::TaoPhrase { address, phrase } => FfiEvent::TaoPhrase { address, phrase },
                 Event::SendFailed { contact_id, wire_id, error } => {
                     FfiEvent::SendFailed { contact_id, wire_id, message: error }
                 }
@@ -318,6 +421,74 @@ impl Client {
             .lock()
             .expect("outbound lock")
             .send(Cmd::ClearHistory { contact_id, older_than_secs });
+    }
+
+    /// Balances (and the offline snapshot); answers with a TaoWallet event.
+    pub fn tao_refresh(&self) {
+        self.tao(TaoCmd::Refresh);
+    }
+
+    pub fn tao_new(&self, name: String) {
+        self.tao(TaoCmd::New { name });
+        self.tao(TaoCmd::Refresh);
+    }
+
+    pub fn tao_import(&self, name: String, phrase: String) {
+        self.tao(TaoCmd::Import { name, phrase });
+        self.tao(TaoCmd::Refresh);
+    }
+
+    pub fn tao_watch(&self, name: String, address: String) {
+        self.tao(TaoCmd::Watch { name, address });
+        self.tao(TaoCmd::Refresh);
+    }
+
+    pub fn tao_use(&self, address: String) {
+        self.tao(TaoCmd::Use { address });
+    }
+
+    pub fn tao_forget(&self, address: String) {
+        self.tao(TaoCmd::Forget { address });
+    }
+
+    /// Answers with a TaoPhrase event. Call only on an explicit user action.
+    pub fn tao_reveal(&self, address: String) {
+        self.tao(TaoCmd::Reveal { address });
+    }
+
+    pub fn tao_set_testnet(&self, testnet: bool) {
+        self.tao(TaoCmd::SetNet { net: if testnet { Net::Test } else { Net::Main } });
+    }
+
+    pub fn tao_share(&self, contact_id: i64) {
+        self.tao(TaoCmd::Share { contact_id });
+    }
+
+    /// Pay `amount` ("1.5") to the contact's shared address or `to`. False if
+    /// the amount is invalid. Confirm with the user before calling.
+    pub fn tao_pay(&self, contact_id: i64, amount: String, to: Option<String>, re: Option<String>) -> bool {
+        let Some(rao) = tao::parse_tao(&amount) else { return false };
+        let wire_id = ulid::Ulid::new().to_string();
+        self.tao(TaoCmd::Pay { contact_id, wire_id, rao, to, re });
+        true
+    }
+
+    pub fn tao_request(&self, contact_id: i64, amount: String, memo: Option<String>) -> bool {
+        let Some(rao) = tao::parse_tao(&amount) else { return false };
+        let wire_id = ulid::Ulid::new().to_string();
+        self.tao(TaoCmd::Request { contact_id, wire_id, rao, memo });
+        true
+    }
+
+    pub fn tao_cheque(&self, contact_id: i64, amount: String) -> bool {
+        let Some(rao) = tao::parse_tao(&amount) else { return false };
+        let wire_id = ulid::Ulid::new().to_string();
+        self.tao(TaoCmd::Cheque { contact_id, wire_id, rao });
+        true
+    }
+
+    pub fn tao_cash(&self, contact_id: i64, wire_id: String) {
+        self.tao(TaoCmd::Cash { contact_id, wire_id });
     }
 
     /// The user is looking at this chat (call on open and on new messages

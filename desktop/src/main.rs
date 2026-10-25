@@ -16,6 +16,8 @@ use gpui_kit::{prelude::FluentBuilder as _, *};
 use sanctum_core::contact::{spawn_worker, Cmd, Event};
 use sanctum_core::demo::{self, Settings};
 use sanctum_core::store::StoredMsg;
+use sanctum_core::tao::{self, Net};
+use sanctum_core::wallet::{PayCard, PayKind, PayStatus, TaoCmd, WalletView};
 
 const REACTIONS: [&str; 6] = ["👍", "👎", "❤️", "‼️", "❓", "😂"];
 const ACCENTS: [(&str, u32); 6] = [
@@ -83,6 +85,8 @@ struct Msg {
     read: bool,
     reaction: Option<SharedString>,
     text: SharedString,
+    /// TAO payment card, if this message is one.
+    pay: Option<PayCard>,
     file: Option<(SharedString, String)>,
     sender_seat: Option<i64>,
     ts_ms: i64,
@@ -102,6 +106,7 @@ impl Msg {
             read: m.mine && m.read_ms.is_some(),
             reaction: m.reaction.map(Into::into),
             text: m.text.clone().into(),
+            pay: m.pay.as_deref().and_then(PayCard::parse),
             file: m.file_path.map(|p| (m.text.into(), p)),
             sender_seat: m.sender_seat,
             ts_ms: m.ts_ms,
@@ -121,6 +126,7 @@ impl Msg {
             read: false,
             reaction: None,
             text: text.into(),
+            pay: None,
             file: file.map(|(n, p)| (n.into(), p)),
             sender_seat: None,
             ts_ms: now.timestamp_millis(),
@@ -169,6 +175,13 @@ struct ChatApp {
     join_state: Entity<InputState>,
     group_state: Entity<InputState>,
     timer_state: Entity<InputState>,
+    /// TAO: amount for chat payments, phrase/address for adding accounts.
+    tao_amount: Entity<InputState>,
+    tao_key: Entity<InputState>,
+    wallet: Option<WalletView>,
+    phrase: Option<(String, String)>,
+    /// A money action shown for confirmation before it's sent.
+    pending_tao: Option<(String, TaoCmd)>,
     /// Message list scroll, so new messages follow only a reader at the bottom.
     scroll: ScrollHandle,
     window_active: bool,
@@ -192,6 +205,8 @@ impl ChatApp {
         let join_state = cx.new(|cx| InputState::new(window, cx).placeholder("sanctum://…"));
         let group_state = cx.new(|cx| InputState::new(window, cx).placeholder("Group name"));
         let timer_state = cx.new(|cx| InputState::new(window, cx).placeholder("90m, 2w, 6mo"));
+        let tao_amount = cx.new(|cx| InputState::new(window, cx).placeholder("1.5"));
+        let tao_key = cx.new(|cx| InputState::new(window, cx).placeholder("recovery phrase or address"));
         let mut _subscriptions = vec![cx.subscribe_in(&input_state, window, {
             move |this: &mut Self, _, ev: &InputEvent, window, cx| {
                 if let InputEvent::PressEnter { .. } = ev {
@@ -240,6 +255,11 @@ impl ChatApp {
             join_state,
             group_state,
             timer_state,
+            tao_amount,
+            tao_key,
+            wallet: None,
+            phrase: None,
+            pending_tao: None,
             scroll: ScrollHandle::new(),
             window_active: true,
             outbound: out_tx,
@@ -367,6 +387,19 @@ impl ChatApp {
                         }
                     }
                 }
+                Event::MsgUpdated { contact_id, wire_id, text, pay } => {
+                    if let Some(c) = self.chat_by_id(contact_id) {
+                        if let Some(m) = c.msgs.iter_mut().find(|m| m.wire_id == wire_id) {
+                            m.text = text.into();
+                            m.pay = pay.as_deref().and_then(PayCard::parse);
+                        }
+                    }
+                }
+                Event::TaoWallet(w) => self.wallet = Some(w),
+                Event::TaoPhrase { address, phrase } => {
+                    self.phrase = Some((address, phrase));
+                    self.show_settings = true;
+                }
                 Event::TimerChanged { secs, .. } => {
                     self.settings.disappear_secs = secs;
                     self.settings.save();
@@ -396,6 +429,208 @@ impl ChatApp {
 
     fn selected_id(&self) -> Option<i64> {
         self.chats.get(self.selected).map(|c| c.id)
+    }
+
+    fn tao(&self, cmd: TaoCmd) {
+        let _ = self.outbound.send(Cmd::Tao(cmd));
+    }
+
+    fn net_label(&self) -> &'static str {
+        match Net::from_id(&self.settings.tao_net) {
+            Some(Net::Test) => "testnet",
+            _ => "MAINNET",
+        }
+    }
+
+    /// Settings → TAO wallet: accounts, balances, add, phrase, network.
+    fn wallet_section(&mut self, p: &Pal, cx: &mut Context<Self>) -> Div {
+        let small = |t: String, c: u32| div().text_xs().text_color(rgb(c)).child(t);
+        let mut col = v_flex().w_full().gap_2().pt_2().child(
+            h_flex()
+                .gap_3()
+                .items_center()
+                .child(div().text_sm().font_semibold().text_color(rgb(p.text)).child("TAO wallet"))
+                .child(small(self.net_label().into(), p.sub))
+                .child(div().flex_1())
+                .child(
+                    Button::new("tao-refresh")
+                        .outline()
+                        .label("Refresh")
+                        .on_click(cx.listener(|this, _, _, _| this.tao(TaoCmd::Refresh))),
+                )
+                .child(Button::new("tao-new").outline().label("New account").on_click(cx.listener(
+                    |this, _, _, _| {
+                        this.tao(TaoCmd::New { name: "Main".into() });
+                        this.tao(TaoCmd::Refresh);
+                    },
+                )))
+                .child(
+                    Switch::new("tao-testnet")
+                        .label("Testnet")
+                        .checked(self.settings.tao_net == "test")
+                        .on_click(cx.listener(|this, v: &bool, _, cx| {
+                            let net = if *v { Net::Test } else { Net::Main };
+                            this.settings.tao_net = net.id().into();
+                            this.tao(TaoCmd::SetNet { net });
+                            cx.notify();
+                        })),
+                ),
+        );
+        let w = self.wallet.clone();
+        let active = w.as_ref().and_then(|w| w.active.clone());
+        for (i, a) in w.iter().flat_map(|w| w.accounts.iter()).enumerate() {
+            let is_active = active.as_deref() == Some(a.address.as_str());
+            let (addr, addr2, addr3) = (a.address.clone(), a.address.clone(), a.address.clone());
+            col = col.child(
+                h_flex()
+                    .w_full()
+                    .gap_2()
+                    .items_center()
+                    .child(small(if is_active { "▸".into() } else { " ".into() }, p.text))
+                    .child(div().text_sm().text_color(rgb(p.text)).child(format!(
+                        "{}{}",
+                        a.name,
+                        if a.watch_only { " (watch-only)" } else { "" }
+                    )))
+                    .child(div().flex_1().text_xs().text_color(rgb(p.sub)).child(a.address.clone()))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(p.text))
+                            .child(a.balance.map(tao::format_tao).unwrap_or_else(|| "…".into())),
+                    )
+                    .child(Button::new(("tao-copy", i)).ghost().label("Copy").on_click(cx.listener(
+                        move |_, _, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(addr.clone())),
+                    )))
+                    .when(!is_active, |d| {
+                        d.child(Button::new(("tao-use", i)).ghost().label("Use").on_click(cx.listener(
+                            move |this, _, _, _| this.tao(TaoCmd::Use { address: addr2.clone() }),
+                        )))
+                    })
+                    .when(!a.watch_only, |d| {
+                        d.child(Button::new(("tao-phrase", i)).ghost().label("Phrase").on_click(
+                            cx.listener(move |this, _, _, _| {
+                                this.tao(TaoCmd::Reveal { address: addr3.clone() })
+                            }),
+                        ))
+                    }),
+            );
+        }
+        col = col.child(
+            h_flex()
+                .w_full()
+                .gap_2()
+                .child(div().flex_1().child(Input::new(&self.tao_key)))
+                .child(Button::new("tao-import").outline().label("Import phrase").on_click(cx.listener(
+                    |this, _, window, cx| {
+                        let phrase = this.tao_key.read(cx).value().to_string();
+                        this.tao(TaoCmd::Import { name: "Imported".into(), phrase });
+                        this.tao(TaoCmd::Refresh);
+                        this.tao_key.update(cx, |s, cx| s.set_value("", window, cx));
+                    },
+                )))
+                .child(Button::new("tao-watch").outline().label("Watch address").on_click(cx.listener(
+                    |this, _, window, cx| {
+                        let address = this.tao_key.read(cx).value().trim().to_string();
+                        this.tao(TaoCmd::Watch { name: "Watch-only".into(), address });
+                        this.tao(TaoCmd::Refresh);
+                        this.tao_key.update(cx, |s, cx| s.set_value("", window, cx));
+                    },
+                ))),
+        );
+        if let Some((addr, phrase)) = self.phrase.clone() {
+            col = col.child(
+                v_flex()
+                    .gap_1()
+                    .p_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(0xFF9F0A))
+                    .child(small(
+                        format!("Recovery phrase for {addr}: anyone with it controls the funds"),
+                        0xFF9F0A,
+                    ))
+                    .child(div().text_sm().text_color(rgb(p.text)).child(phrase))
+                    .child(Button::new("tao-hide").outline().label("Hide").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.phrase = None;
+                            cx.notify();
+                        },
+                    ))),
+            );
+        }
+        col
+    }
+
+    /// Chat details → TAO: amount, then send / request / cheque / share.
+    fn tao_chat_row(&mut self, contact_id: i64, p: &Pal, cx: &mut Context<Self>) -> Div {
+        fn act(this: &mut ChatApp, cx: &mut Context<ChatApp>, contact_id: i64, verb: &str) {
+            let amount = this.tao_amount.read(cx).value().to_string();
+            let Some(rao) = tao::parse_tao(&amount) else {
+                this.status = "error: enter an amount like 1.5".into();
+                return;
+            };
+            let wire_id = ulid::Ulid::new().to_string();
+            let what = tao::format_tao(rao);
+            match verb {
+                "send" => {
+                    let prompt = format!("Send {what} to their shared address on {}?", this.net_label());
+                    let cmd = TaoCmd::Pay { contact_id, wire_id, rao, to: None, re: None };
+                    this.pending_tao = Some((prompt, cmd));
+                }
+                "cheque" => {
+                    let prompt = format!("Sign a {what} cheque to them on {}?", this.net_label());
+                    this.pending_tao = Some((prompt, TaoCmd::Cheque { contact_id, wire_id, rao }));
+                }
+                _ => this.tao(TaoCmd::Request { contact_id, wire_id, rao, memo: None }),
+            }
+        }
+        let button = |id: &'static str, label: &'static str, verb: &'static str, cx: &mut Context<Self>| {
+            Button::new(id).outline().label(label).on_click(cx.listener(move |this, _, _, cx| {
+                act(this, cx, contact_id, verb);
+                cx.notify();
+            }))
+        };
+        let mut col = v_flex().w_full().gap_2().child(
+            h_flex()
+                .w_full()
+                .gap_2()
+                .items_center()
+                .child(div().text_sm().text_color(rgb(p.text)).child("TAO"))
+                .child(div().w(px(110.)).child(Input::new(&self.tao_amount)))
+                .child(button("tao-send", "Send", "send", cx))
+                .child(button("tao-request", "Request", "request", cx))
+                .child(button("tao-cheque", "Cheque", "cheque", cx))
+                .child(Button::new("tao-share").ghost().label("Share address").on_click(cx.listener(
+                    move |this, _, _, _| this.tao(TaoCmd::Share { contact_id }),
+                ))),
+        );
+        if let Some((prompt, _)) = self.pending_tao.as_ref().map(|(p, _)| (p.clone(), ())) {
+            col = col.child(self.confirm_row(prompt, cx));
+        }
+        col
+    }
+
+    /// "Are you sure?" for anything that moves money.
+    fn confirm_row(&mut self, prompt: String, cx: &mut Context<Self>) -> Div {
+        h_flex()
+            .gap_2()
+            .items_center()
+            .child(div().text_sm().text_color(rgb(0xFF9F0A)).child(prompt))
+            .child(Button::new("tao-confirm").primary().label("Confirm").on_click(cx.listener(
+                |this, _, _, cx| {
+                    if let Some((_, cmd)) = this.pending_tao.take() {
+                        this.tao(cmd);
+                    }
+                    cx.notify();
+                },
+            )))
+            .child(Button::new("tao-cancel").ghost().label("Cancel").on_click(cx.listener(
+                |this, _, _, cx| {
+                    this.pending_tao = None;
+                    cx.notify();
+                },
+            )))
     }
 
     /// The selected chat is on screen (if the window is focused).
@@ -994,6 +1229,7 @@ impl Render for ChatApp {
                         .text_color(rgb(p.sub))
                         .child("End-to-end encrypted · mailboxes on Hippius (Bittensor SN75)"),
                 )
+                .child(self.wallet_section(&p, cx))
         });
 
         // Per-chat details behind the ⋯ button: name, timer, delete.
@@ -1014,6 +1250,7 @@ impl Render for ChatApp {
                 .bg(rgb(p.surface))
                 .border_b_1()
                 .border_color(rgb(p.border))
+                .children(self.selected_id().filter(|id| *id >= 0).map(|id| self.tao_chat_row(id, &p, cx)))
                 .child(
                     row("Disappearing messages", Some("timed local deletion, synced to contact"))
                         .child(
@@ -1365,6 +1602,7 @@ impl Render for ChatApp {
         if let Some(chat) = self.chats.get(self.selected) {
             // Only the newest finished send carries Sent / Delivered.
             let last_sent = chat.msgs.iter().rposition(|m| m.mine && m.sent && !m.failed);
+            let chat_id = chat.id;
             for (i, m) in chat.msgs.iter().enumerate() {
                 let prev = i.checked_sub(1).and_then(|j| chat.msgs.get(j));
                 let new_day = prev.is_none_or(|pm| pm.day != m.day);
@@ -1396,7 +1634,49 @@ impl Render for ChatApp {
                     bubble.bg(rgb(p.bubble)).text_color(rgb(p.bubble_text))
                 };
 
-                let content: AnyElement = if let Some((name, path)) = &m.file {
+                let content: AnyElement = if let Some(card) = &m.pay {
+                    let mut c = v_flex()
+                        .gap_1()
+                        .child(div().text_xs().child(match (card.kind, m.mine) {
+                            (PayKind::Request, true) => "τ YOU REQUESTED",
+                            (PayKind::Request, false) => "τ REQUEST",
+                            (PayKind::Cheque, _) => "τ CHEQUE",
+                            (PayKind::Paid, true) => "τ YOU PAID",
+                            (PayKind::Paid, false) => "τ PAYMENT",
+                        }))
+                        .child(div().text_xl().font_semibold().child(tao::format_tao(card.amount())))
+                        .child(div().text_xs().child(m.text.clone()));
+                    let wid = m.wire_id.clone();
+                    if !m.mine && card.kind == PayKind::Request && card.status == PayStatus::Open {
+                        let (to, rao) = (card.to.clone(), card.amount());
+                        let what = tao::format_tao(rao);
+                        c = c.child(Button::new(("tao-pay", i)).primary().label(format!("Pay {what}")).on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                let prompt = format!("Pay {what} to {to} on {}?", this.net_label());
+                                let cmd = TaoCmd::Pay {
+                                    contact_id: chat_id,
+                                    wire_id: ulid::Ulid::new().to_string(),
+                                    rao,
+                                    to: Some(to.clone()),
+                                    re: Some(wid.clone()),
+                                };
+                                this.pending_tao = Some((prompt, cmd));
+                                this.show_chat_info = true;
+                                cx.notify();
+                            }),
+                        ));
+                    } else if !m.mine
+                        && card.kind == PayKind::Cheque
+                        && matches!(card.status, PayStatus::Pending | PayStatus::Bounced)
+                    {
+                        c = c.child(Button::new(("tao-cash", i)).primary().label("Cash cheque").on_click(
+                            cx.listener(move |this, _, _, _| {
+                                this.tao(TaoCmd::Cash { contact_id: chat_id, wire_id: wid.clone() })
+                            }),
+                        ));
+                    }
+                    c.into_any_element()
+                } else if let Some((name, path)) = &m.file {
                     if is_image(name) {
                         img(std::path::PathBuf::from(path))
                             .max_w(px(240.))

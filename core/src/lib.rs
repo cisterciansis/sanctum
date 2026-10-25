@@ -14,9 +14,11 @@ pub mod demo;
 pub mod invite;
 pub mod provision;
 pub mod store;
+pub mod tao;
 #[cfg(feature = "tor")]
 pub mod tor;
 pub mod transport;
+pub mod wallet;
 
 pub use crypto_box;
 

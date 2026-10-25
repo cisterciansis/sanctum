@@ -19,6 +19,8 @@ use ratatui::{
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol, Resize, StatefulImage};
 use sanctum_core::contact::{spawn_worker, Cmd, Event};
 use sanctum_core::demo::{self, Settings};
+use sanctum_core::tao::{self as taolib, Net};
+use sanctum_core::wallet::{PayCard, PayKind, PayStatus, TaoCmd, WalletView};
 use sanctum_core::store::StoredMsg;
 
 const REACTIONS: [&str; 6] = ["👍", "👎", "❤️", "‼️", "❓", "😂"];
@@ -34,6 +36,8 @@ struct Msg {
     reaction: Option<String>,
     /// Local path of an attachment (received copy, or the file we sent).
     file: Option<String>,
+    /// TAO payment card, if this message is one.
+    pay: Option<PayCard>,
     text: String,
     time: String,
     day: String,
@@ -50,6 +54,7 @@ impl Msg {
             read: m.mine && m.read_ms.is_some(),
             reaction: m.reaction,
             file: m.file_path.clone(),
+            pay: m.pay.as_deref().and_then(PayCard::parse),
             text: {
                 let base = if let Some(p) = &m.file_path {
                     // Local save path, shortened: ~ instead of /Users/<you>.
@@ -82,6 +87,22 @@ struct Chat {
     unread: u32,
 }
 
+/// TAO commands, shown in the wallet (Ctrl-W).
+const TAO_COMMANDS: &[(&str, &str)] = &[
+    ("/tao new [name]", "create an account (12-word phrase)"),
+    ("/tao import <words>", "restore from a recovery phrase"),
+    ("/tao watch <address>", "add a watch-only address"),
+    ("/tao use <n> · forget <n>", "pick the paying account · remove one"),
+    ("/tao phrase", "show the active account's recovery phrase"),
+    ("/tao net main|test", "switch network"),
+    ("in a chat: /tao share", "send them your address"),
+    ("/tao send <amt> [address]", "pay them (asks /yes first)"),
+    ("/tao request <amt> [memo]", "ask them to pay you"),
+    ("/tao pay", "pay their newest open request"),
+    ("/tao cheque <amt>", "signed offline; either side cashes it later"),
+    ("/tao cash", "cash their newest cheque"),
+];
+
 /// The resting status line.
 const IDLE: &str = "end-to-end encrypted · hippius";
 
@@ -94,6 +115,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("Ctrl-R 1-6", "react to the last message"),
     ("Ctrl-U", "unsend your last undelivered message"),
     ("Ctrl-S", "settings and this list"),
+    ("Ctrl-W or /tao", "TAO wallet: accounts, balances"),
     ("Esc", "quit"),
     ("/file <path>", "send a file (up to 25 MB)"),
     ("Ctrl-O or /open", "open the newest attachment (photos, PDFs, media)"),
@@ -203,6 +225,12 @@ struct App {
     status_since: (String, std::time::Instant),
     settings: Settings,
     show_settings: bool,
+    /// Wallet overlay (Ctrl-W), its last state, and a phrase being shown.
+    show_wallet: bool,
+    wallet: Option<WalletView>,
+    phrase: Option<(String, String)>,
+    /// A money action waiting for /yes.
+    pending_tao: Option<TaoCmd>,
     react_mode: bool,
     inviting: bool,
     /// Terminal has focus, so the selected chat is actually being looked at
@@ -237,6 +265,10 @@ impl App {
             status_since: (String::new(), std::time::Instant::now()),
             settings: Settings::load(),
             show_settings: false,
+            show_wallet: false,
+            wallet: None,
+            phrase: None,
+            pending_tao: None,
             react_mode: false,
             inviting: false,
             pending_delete: None,
@@ -369,6 +401,19 @@ impl App {
                     self.inviting = false;
                     self.status = format!("error: {e}");
                 }
+                Event::TaoWallet(v) => self.wallet = Some(v),
+                Event::TaoPhrase { address, phrase } => {
+                    self.phrase = Some((address, phrase));
+                    self.show_wallet = true;
+                }
+                Event::MsgUpdated { contact_id, wire_id, text, pay } => {
+                    if let Some(c) = self.chat_by_id(contact_id) {
+                        if let Some(m) = c.msgs.iter_mut().find(|m| m.wire_id == wire_id) {
+                            m.text = text;
+                            m.pay = pay.as_deref().and_then(PayCard::parse);
+                        }
+                    }
+                }
             }
         }
     }
@@ -388,10 +433,32 @@ impl App {
             self.input.clear();
             return;
         }
+        if text == "/yes" {
+            match self.pending_tao.take() {
+                Some(cmd) => {
+                    let _ = self.outbound.send(Cmd::Tao(cmd));
+                    self.status = "on its way; the card in the chat tracks it".into();
+                }
+                None => self.status = "nothing to confirm".into(),
+            }
+            self.input.clear();
+            return;
+        }
+        if let Some(rest) = text.strip_prefix("/tao") {
+            if self.tao_wallet_cmd(rest.trim()) {
+                self.input.clear();
+                return;
+            }
+        }
         let Some(sel) = self.chats.get(self.selected).map(|c| c.id) else {
             self.status = "no chat selected — Ctrl-N to invite someone".into();
             return;
         };
+        if let Some(rest) = text.strip_prefix("/tao") {
+            self.tao_chat_cmd(sel, rest.trim());
+            self.input.clear();
+            return;
+        }
         if let Some(rest) = text.strip_prefix("/group ") {
             let mut it = rest.splitn(2, ' ');
             let size: i64 = it.next().and_then(|x| x.parse().ok()).unwrap_or(3);
@@ -481,6 +548,127 @@ impl App {
         self.input.clear();
     }
 
+    fn tao(&self, cmd: TaoCmd) {
+        let _ = self.outbound.send(Cmd::Tao(cmd));
+    }
+
+    fn net_label(&self) -> &'static str {
+        match Net::from_id(&self.settings.tao_net) {
+            Some(Net::Test) => "testnet",
+            _ => "MAINNET",
+        }
+    }
+
+    /// Ask before anything moves money; `/yes` sends `cmd`.
+    fn confirm(&mut self, prompt: String, cmd: TaoCmd) {
+        self.status = format!("confirm: {prompt} on {} · /yes to send", self.net_label());
+        self.pending_tao = Some(cmd);
+    }
+
+    /// Wallet commands that need no chat. Returns false for chat commands.
+    fn tao_wallet_cmd(&mut self, args: &str) -> bool {
+        let (verb, rest) = args.split_once(' ').unwrap_or((args, ""));
+        let rest = rest.trim();
+        let pick = |n: &str, w: &Option<WalletView>| {
+            let i: usize = n.parse().ok()?;
+            w.as_ref()?.accounts.get(i.checked_sub(1)?).map(|a| a.address.clone())
+        };
+        match verb {
+            "" | "wallet" | "refresh" => {
+                self.show_wallet = true;
+                self.tao(TaoCmd::Refresh);
+            }
+            "new" => {
+                let name = if rest.is_empty() { "Main" } else { rest };
+                self.tao(TaoCmd::New { name: name.into() });
+                self.tao(TaoCmd::Refresh);
+                self.show_wallet = true;
+            }
+            "import" => self.tao(TaoCmd::Import { name: "Imported".into(), phrase: rest.into() }),
+            "watch" => {
+                let (addr, name) = rest.split_once(' ').unwrap_or((rest, "Watch-only"));
+                self.tao(TaoCmd::Watch { name: name.trim().into(), address: addr.into() });
+            }
+            "use" => match pick(rest, &self.wallet) {
+                Some(address) => self.tao(TaoCmd::Use { address }),
+                None => self.status = "usage: /tao use <n> (numbers in Ctrl-W)".into(),
+            },
+            "forget" => match pick(rest, &self.wallet) {
+                Some(address) => self.confirm(
+                    format!("forget account {rest} (its keys are deleted unless you saved the phrase)"),
+                    TaoCmd::Forget { address },
+                ),
+                None => self.status = "usage: /tao forget <n>".into(),
+            },
+            "phrase" => match self.wallet.as_ref().and_then(|w| w.active.clone()) {
+                Some(address) => self.tao(TaoCmd::Reveal { address }),
+                None => self.status = "no wallet yet: /tao new".into(),
+            },
+            "net" => match Net::from_id(rest) {
+                Some(net) => {
+                    self.settings.tao_net = net.id().into();
+                    self.tao(TaoCmd::SetNet { net });
+                }
+                None => self.status = "usage: /tao net main|test".into(),
+            },
+            _ => return false,
+        }
+        true
+    }
+
+    fn tao_chat_cmd(&mut self, sel: i64, args: &str) {
+        let (verb, rest) = args.split_once(' ').unwrap_or((args, ""));
+        let (amount, tail) = rest.trim().split_once(' ').unwrap_or((rest.trim(), ""));
+        let wire_id = ulid::Ulid::new().to_string();
+        let theirs = |kind: PayKind, status: PayStatus, c: &Chat| {
+            c.msgs
+                .iter()
+                .rev()
+                .find(|m| !m.mine && m.pay.as_ref().is_some_and(|p| p.kind == kind && p.status == status))
+                .map(|m| (m.wire_id.clone(), m.pay.clone().expect("checked")))
+        };
+        match verb {
+            "share" => self.tao(TaoCmd::Share { contact_id: sel }),
+            "send" | "cheque" => {
+                let Some(rao) = taolib::parse_tao(amount) else {
+                    self.status = format!("usage: /tao {verb} <amount> e.g. 1.5");
+                    return;
+                };
+                let to = Some(tail.trim()).filter(|t| !t.is_empty()).map(String::from);
+                let whom = to.clone().unwrap_or_else(|| "their shared address".into());
+                let what = taolib::format_tao(rao);
+                if verb == "send" {
+                    let cmd = TaoCmd::Pay { contact_id: sel, wire_id, rao, to, re: None };
+                    self.confirm(format!("send {what} to {whom}"), cmd);
+                } else {
+                    let cmd = TaoCmd::Cheque { contact_id: sel, wire_id, rao };
+                    self.confirm(format!("sign a {what} cheque to them"), cmd);
+                }
+            }
+            "request" => match taolib::parse_tao(amount) {
+                Some(rao) => {
+                    let memo = Some(tail.trim()).filter(|t| !t.is_empty()).map(String::from);
+                    self.tao(TaoCmd::Request { contact_id: sel, wire_id, rao, memo });
+                }
+                None => self.status = "usage: /tao request <amount> [memo]".into(),
+            },
+            "pay" => match self.current().and_then(|c| theirs(PayKind::Request, PayStatus::Open, c)) {
+                Some((re, card)) => {
+                    let rao = card.amount();
+                    let what = format!("pay their request of {} to {}", taolib::format_tao(rao), card.to);
+                    let cmd = TaoCmd::Pay { contact_id: sel, wire_id, rao, to: Some(card.to), re: Some(re) };
+                    self.confirm(what, cmd);
+                }
+                None => self.status = "no open request from them".into(),
+            },
+            "cash" => match self.current().and_then(|c| theirs(PayKind::Cheque, PayStatus::Pending, c)) {
+                Some((wire_id, _)) => self.tao(TaoCmd::Cash { contact_id: sel, wire_id }),
+                None => self.status = "no uncashed cheque from them".into(),
+            },
+            _ => self.status = "unknown /tao command; Ctrl-S lists them".into(),
+        }
+    }
+
     /// Open the chat's newest attachment, or show it in Finder.
     fn open_attachment(&mut self, reveal: bool) {
         let path = self
@@ -536,6 +724,7 @@ impl App {
                 read: false,
                 reaction: None,
                 file: None,
+                pay: None,
                 text,
                 time: now.format("%-I:%M %p").to_string(),
                 day: now.format("%A, %b %-d").to_string(),
@@ -657,6 +846,14 @@ impl App {
 
         if self.show_settings {
             self.draw_settings(f, body, composer);
+            return;
+        }
+        if self.show_wallet {
+            self.draw_wallet(f, body);
+            f.render_widget(
+                Paragraph::new(self.input.as_str()).block(Block::default().borders(Borders::ALL)),
+                composer,
+            );
             return;
         }
 
@@ -800,6 +997,50 @@ impl App {
         f.render_stateful_widget(StatefulImage::default(), Rect { x, ..fit }, state);
     }
 
+    fn draw_wallet(&self, f: &mut Frame, body: Rect) {
+        let dim = Style::default().fg(Color::DarkGray);
+        let mut rows = vec![
+            Line::raw(""),
+            Line::from(vec![
+                Span::raw("  TAO wallet").bold(),
+                Span::styled(format!("  ·  {}  ·  r refresh · esc close", self.net_label()), dim),
+            ]),
+            Line::raw(""),
+        ];
+        match &self.wallet {
+            Some(w) if !w.accounts.is_empty() => {
+                for (i, a) in w.accounts.iter().enumerate() {
+                    let active = w.active.as_deref() == Some(a.address.as_str());
+                    let bal = a.balance.map(taolib::format_tao).unwrap_or_else(|| "…".into());
+                    let kind = if a.watch_only { " (watch-only)" } else { "" };
+                    rows.push(Line::raw(format!(
+                        "  {} {}{} {:<10} {}  {}",
+                        i + 1,
+                        if active { "▸" } else { " " },
+                        kind,
+                        a.name,
+                        a.address,
+                        bal
+                    )));
+                }
+            }
+            _ => rows.push(Line::raw("  No accounts yet. /tao new creates one; /tao import <words> restores.")),
+        }
+        if let Some((addr, phrase)) = &self.phrase {
+            rows.push(Line::raw(""));
+            rows.push(Line::from(Span::styled(
+                format!("  Recovery phrase for {addr}: anyone with it controls the funds"),
+                Style::default().fg(Color::Yellow),
+            )));
+            rows.push(Line::raw(format!("  {phrase}")));
+        }
+        rows.push(Line::raw(""));
+        for (cmd, what) in TAO_COMMANDS {
+            rows.push(Line::from(vec![Span::raw(format!("  {cmd:<26}")), Span::styled(*what, dim)]));
+        }
+        f.render_widget(Paragraph::new(rows).wrap(Wrap { trim: false }), body);
+    }
+
     fn draw_settings(
         &self,
         f: &mut Frame,
@@ -856,11 +1097,16 @@ impl App {
             self.status_since = (self.status.clone(), now);
             return;
         }
-        let ttl = if self.status.starts_with("error") { 10 } else { 4 };
+        let ttl = match () {
+            _ if self.status.starts_with("confirm") => 30, // money: time to read it
+            _ if self.status.starts_with("error") => 10,
+            _ => 4,
+        };
         let sticky = self.status == IDLE || self.status == "loading…";
         if !sticky && now.duration_since(self.status_since.1).as_secs() >= ttl {
             self.status = IDLE.into();
             self.pending_delete = None;
+            self.pending_tao = None;
         }
     }
 
@@ -887,6 +1133,21 @@ impl App {
                                 self.react_mode = false;
                             }
                             _ => self.react_mode = false,
+                        }
+                        continue;
+                    }
+                    if self.show_wallet && key.code != KeyCode::Enter && key.modifiers.is_empty() {
+                        match key.code {
+                            KeyCode::Esc => {
+                                self.show_wallet = false;
+                                self.phrase = None; // never leave a phrase on screen
+                            }
+                            KeyCode::Char('r') if self.input.is_empty() => self.tao(TaoCmd::Refresh),
+                            KeyCode::Char(c) => self.input.push(c),
+                            KeyCode::Backspace => {
+                                self.input.pop();
+                            }
+                            _ => {}
                         }
                         continue;
                     }
@@ -940,6 +1201,10 @@ impl App {
                         (KeyCode::Char('o'), KeyModifiers::CONTROL) => self.open_attachment(false),
                         (KeyCode::Char('r'), KeyModifiers::CONTROL) => self.react_mode = true,
                         (KeyCode::Char('s'), KeyModifiers::CONTROL) => self.show_settings = true,
+                        (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
+                            self.show_wallet = true;
+                            self.tao(TaoCmd::Refresh);
+                        }
                         (KeyCode::Enter, _) => self.submit(),
                         (KeyCode::Backspace, _) => {
                             self.input.pop();
@@ -957,8 +1222,15 @@ fn main() -> io::Result<()> {
     let terminal = ratatui::init();
     // Focus reports tell us when the chat is really on screen (read receipts).
     let _ = crossterm::execute!(io::stdout(), crossterm::event::EnableFocusChange);
-    // Ask the terminal which image protocol it speaks; half-blocks otherwise.
-    let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::from_fontsize((8, 16)));
+    // Pick the image protocol from the environment rather than querying the
+    // terminal: when a terminal doesn't answer, ratatui-image's query leaves a
+    // thread blocked on stdin that steals keystrokes. iTerm2/WezTerm/… are
+    // detected by from_fontsize itself; kitty-protocol terminals here.
+    let mut picker = Picker::from_fontsize((10, 20));
+    let env = |k: &str| std::env::var(k).unwrap_or_default();
+    if env("TERM").contains("kitty") || env("TERM_PROGRAM") == "ghostty" || !env("KITTY_WINDOW_ID").is_empty() {
+        picker.set_protocol_type(ratatui_image::picker::ProtocolType::Kitty);
+    }
     let result = App::new(picker).run(terminal);
     let _ = crossterm::execute!(io::stdout(), crossterm::event::DisableFocusChange);
     ratatui::restore();

@@ -50,7 +50,9 @@ struct MsgVM: Identifiable {
     /// Own message the peer has read (read receipts on).
     var readAt: Date?
     var reaction: String?
-    let text: String
+    var text: String
+    /// TAO payment card, if this message is one.
+    var pay: FfiPayCard?
     let filePath: String?
     let senderSeat: Int64?
     let ts: Date
@@ -64,6 +66,7 @@ func toVM(_ m: FfiMsg) -> MsgVM {
         readAt: m.mine ? m.readMs.map { Date(timeIntervalSince1970: Double($0) / 1000.0) } : nil,
         reaction: m.reaction,
         text: m.text,
+        pay: m.pay,
         filePath: m.filePath,
         senderSeat: m.senderSeat,
         ts: Date(timeIntervalSince1970: Double(m.tsMs) / 1000.0)
@@ -92,6 +95,9 @@ final class AppModel: ObservableObject {
     @Published var settings: FfiSettings
     /// Embedded Tor progress; nil while Tor is off.
     @Published var tor: FfiTorStatus?
+    /// TAO wallet state, and a recovery phrase the user chose to see.
+    @Published var wallet: FfiWallet?
+    @Published var phrase: PhraseVM?
 
     // Exactly one Client: each spawns a worker, and two workers would race
     // on the same chats' ratchet state.
@@ -162,6 +168,15 @@ final class AppModel: ObservableObject {
                 if let i = idx(id), let j = chats[i].msgs.firstIndex(where: { $0.id == wireId }) {
                     chats[i].msgs[j].delivered = true
                 }
+            case .msgUpdated(let id, let wireId, let text, let pay):
+                if let i = idx(id), let j = chats[i].msgs.firstIndex(where: { $0.id == wireId }) {
+                    chats[i].msgs[j].text = text
+                    chats[i].msgs[j].pay = pay
+                }
+            case .taoWallet(let w):
+                wallet = w
+            case .taoPhrase(let address, let words):
+                phrase = PhraseVM(address: address, words: words.split(separator: " ").map(String.init))
             case .removed(let id, let wireId):
                 if let i = idx(id) { chats[i].msgs.removeAll { $0.id == wireId } }
             case .sent(let id, let wireId):
@@ -230,6 +245,27 @@ final class AppModel: ObservableObject {
         inviting = true
         client.newInvite(name: "Contact \(chats.count + 1)")
     }
+
+    // TAO wallet; payments confirm in the UI before these are called.
+    func taoRefresh() { client.taoRefresh() }
+    func taoNew() { client.taoNew(name: "Account \((wallet?.accounts.count ?? 0) + 1)") }
+    func taoImport(_ phrase: String) { client.taoImport(name: "Imported", phrase: phrase) }
+    func taoWatch(_ address: String) { client.taoWatch(name: "Watch-only", address: address) }
+    func taoUse(_ address: String) { client.taoUse(address: address) }
+    func taoForget(_ address: String) { client.taoForget(address: address) }
+    func taoReveal(_ address: String) { client.taoReveal(address: address) }
+    func taoSetTestnet(_ on: Bool) { client.taoSetTestnet(testnet: on) }
+    func taoShare(_ chatId: Int64) { client.taoShare(contactId: chatId) }
+    func taoPay(_ chatId: Int64, amount: String, to: String?, re: String?) -> Bool {
+        client.taoPay(contactId: chatId, amount: amount, to: to, re: re)
+    }
+    func taoRequest(_ chatId: Int64, amount: String, memo: String?) -> Bool {
+        client.taoRequest(contactId: chatId, amount: amount, memo: memo)
+    }
+    func taoCheque(_ chatId: Int64, amount: String) -> Bool {
+        client.taoCheque(contactId: chatId, amount: amount)
+    }
+    func taoCash(_ chatId: Int64, wireId: String) { client.taoCash(contactId: chatId, wireId: wireId) }
 
     func saveSettings() {
         client.saveSettings(new: settings)

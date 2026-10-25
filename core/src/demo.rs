@@ -230,6 +230,9 @@ pub struct Settings {
     /// Send read receipts, and show the peer's. Reciprocal; off by default.
     #[serde(default)]
     pub read_receipts: bool,
+    /// TAO network for the wallet: "main" or "test".
+    #[serde(default = "default_tao_net")]
+    pub tao_net: String,
     /// Optional Hippius management-API token (console → Settings). Purely
     /// opt-in: without it the app works as-is; with it the client can mint
     /// per-contact buckets/sub-tokens and rotate queues.
@@ -246,6 +249,10 @@ pub struct Settings {
     /// Accent color for own bubbles / send button, 0xRRGGBB.
     #[serde(default = "default_accent")]
     pub accent: u32,
+}
+
+fn default_tao_net() -> String {
+    "main".into()
 }
 
 fn default_theme() -> String {
@@ -269,6 +276,7 @@ impl Default for Settings {
             typing_indicators: false,
             disappear_secs: 0,
             read_receipts: false,
+            tao_net: default_tao_net(),
             hippius_api_token: None,
             dev_keyfile: false,
             theme: default_theme(),

@@ -357,6 +357,71 @@ void uniffi_sanctum_core_fn_method_client_set_timer(void*_Nonnull ptr, int64_t c
 RustBuffer uniffi_sanctum_core_fn_method_client_snapshot_messages(void*_Nonnull ptr, int64_t contact_id, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_CASH
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_CASH
+void uniffi_sanctum_core_fn_method_client_tao_cash(void*_Nonnull ptr, int64_t contact_id, RustBuffer wire_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_CHEQUE
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_CHEQUE
+int8_t uniffi_sanctum_core_fn_method_client_tao_cheque(void*_Nonnull ptr, int64_t contact_id, RustBuffer amount, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_FORGET
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_FORGET
+void uniffi_sanctum_core_fn_method_client_tao_forget(void*_Nonnull ptr, RustBuffer address, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_IMPORT
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_IMPORT
+void uniffi_sanctum_core_fn_method_client_tao_import(void*_Nonnull ptr, RustBuffer name, RustBuffer phrase, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_NEW
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_NEW
+void uniffi_sanctum_core_fn_method_client_tao_new(void*_Nonnull ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_PAY
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_PAY
+int8_t uniffi_sanctum_core_fn_method_client_tao_pay(void*_Nonnull ptr, int64_t contact_id, RustBuffer amount, RustBuffer to, RustBuffer re, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_REFRESH
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_REFRESH
+void uniffi_sanctum_core_fn_method_client_tao_refresh(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_REQUEST
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_REQUEST
+int8_t uniffi_sanctum_core_fn_method_client_tao_request(void*_Nonnull ptr, int64_t contact_id, RustBuffer amount, RustBuffer memo, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_REVEAL
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_REVEAL
+void uniffi_sanctum_core_fn_method_client_tao_reveal(void*_Nonnull ptr, RustBuffer address, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_SET_TESTNET
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_SET_TESTNET
+void uniffi_sanctum_core_fn_method_client_tao_set_testnet(void*_Nonnull ptr, int8_t testnet, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_SHARE
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_SHARE
+void uniffi_sanctum_core_fn_method_client_tao_share(void*_Nonnull ptr, int64_t contact_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_USE
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_USE
+void uniffi_sanctum_core_fn_method_client_tao_use(void*_Nonnull ptr, RustBuffer address, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_WATCH
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_TAO_WATCH
+void uniffi_sanctum_core_fn_method_client_tao_watch(void*_Nonnull ptr, RustBuffer name, RustBuffer address, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_UNSEND
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_METHOD_CLIENT_UNSEND
 void uniffi_sanctum_core_fn_method_client_unsend(void*_Nonnull ptr, int64_t contact_id, RustBuffer wire_id, RustCallStatus *_Nonnull out_status
@@ -376,6 +441,16 @@ RustBuffer uniffi_sanctum_core_fn_func_disappear_presets(RustCallStatus *_Nonnul
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_PARSE_DISAPPEAR
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_PARSE_DISAPPEAR
 RustBuffer uniffi_sanctum_core_fn_func_parse_disappear(RustBuffer input, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_TAO_PARSE_AMOUNT
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_TAO_PARSE_AMOUNT
+RustBuffer uniffi_sanctum_core_fn_func_tao_parse_amount(RustBuffer input, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_TAO_VALID_ADDRESS
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_TAO_VALID_ADDRESS
+int8_t uniffi_sanctum_core_fn_func_tao_valid_address(RustBuffer input, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_FN_FUNC_TOR_STATUS
@@ -682,6 +757,18 @@ uint16_t uniffi_sanctum_core_checksum_func_parse_disappear(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_TAO_PARSE_AMOUNT
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_TAO_PARSE_AMOUNT
+uint16_t uniffi_sanctum_core_checksum_func_tao_parse_amount(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_TAO_VALID_ADDRESS
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_TAO_VALID_ADDRESS
+uint16_t uniffi_sanctum_core_checksum_func_tao_valid_address(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_TOR_STATUS
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_FUNC_TOR_STATUS
 uint16_t uniffi_sanctum_core_checksum_func_tor_status(void
@@ -793,6 +880,84 @@ uint16_t uniffi_sanctum_core_checksum_method_client_set_timer(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_SNAPSHOT_MESSAGES
 #define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_SNAPSHOT_MESSAGES
 uint16_t uniffi_sanctum_core_checksum_method_client_snapshot_messages(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_CASH
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_CASH
+uint16_t uniffi_sanctum_core_checksum_method_client_tao_cash(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_CHEQUE
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_CHEQUE
+uint16_t uniffi_sanctum_core_checksum_method_client_tao_cheque(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_FORGET
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_FORGET
+uint16_t uniffi_sanctum_core_checksum_method_client_tao_forget(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_IMPORT
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_IMPORT
+uint16_t uniffi_sanctum_core_checksum_method_client_tao_import(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_NEW
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_NEW
+uint16_t uniffi_sanctum_core_checksum_method_client_tao_new(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_PAY
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_PAY
+uint16_t uniffi_sanctum_core_checksum_method_client_tao_pay(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_REFRESH
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_REFRESH
+uint16_t uniffi_sanctum_core_checksum_method_client_tao_refresh(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_REQUEST
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_REQUEST
+uint16_t uniffi_sanctum_core_checksum_method_client_tao_request(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_REVEAL
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_REVEAL
+uint16_t uniffi_sanctum_core_checksum_method_client_tao_reveal(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_SET_TESTNET
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_SET_TESTNET
+uint16_t uniffi_sanctum_core_checksum_method_client_tao_set_testnet(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_SHARE
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_SHARE
+uint16_t uniffi_sanctum_core_checksum_method_client_tao_share(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_USE
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_USE
+uint16_t uniffi_sanctum_core_checksum_method_client_tao_use(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_WATCH
+#define UNIFFI_FFIDEF_UNIFFI_SANCTUM_CORE_CHECKSUM_METHOD_CLIENT_TAO_WATCH
+uint16_t uniffi_sanctum_core_checksum_method_client_tao_watch(void
     
 );
 #endif

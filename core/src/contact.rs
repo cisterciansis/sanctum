@@ -153,6 +153,8 @@ pub enum ChatItem {
     Delete { ref_id: String },
     /// The peer read these of our messages.
     Read { refs: Vec<String> },
+    /// TAO address share or payment card (validated in `wallet`).
+    Tao(serde_json::Value),
 }
 
 impl ContactSession {
@@ -255,6 +257,11 @@ impl ContactSession {
         Ok(())
     }
 
+    /// Send a control message (payments) over this chat's session.
+    pub(crate) fn send_control(&mut self, body: &serde_json::Value) -> Result<(), String> {
+        self.deposit(body).map(|_| ())
+    }
+
     /// Tell the peer we read these of their messages.
     pub fn send_read(&mut self, wire_ids: &[String]) -> Result<(), String> {
         self.deposit(&serde_json::json!({ "t": "read", "ref": wire_ids }))?;
@@ -331,6 +338,7 @@ impl ContactSession {
                         secs: v.get("s").and_then(|x| x.as_u64()).unwrap_or(0),
                     }),
                     Some("del") => Some(ChatItem::Delete { ref_id: s("ref") }),
+                    Some("taoaddr" | "pay") => Some(ChatItem::Tao(v.clone())),
                     // Peer-controlled: bounded count and id length.
                     Some("read") => Some(ChatItem::Read {
                         refs: v
@@ -377,6 +385,8 @@ pub enum Cmd {
     /// The user is looking at this chat: mark received messages read and,
     /// if read receipts are on, tell the peer.
     MarkRead { contact_id: i64 },
+    /// TAO wallet and in-chat payments.
+    Tao(crate::wallet::TaoCmd),
     /// Delete one message from this device; with `everyone`, also from the
     /// peer's (own messages in direct chats only).
     DeleteMsg { contact_id: i64, wire_id: String, everyone: bool },
@@ -397,6 +407,12 @@ pub enum Event {
     Delivered { contact_id: i64, wire_id: String },
     /// The peer read these own messages (only with read receipts on).
     Read { contact_id: i64, wire_ids: Vec<String>, ts_ms: i64 },
+    /// A message's text/payment card changed (payment status updates).
+    MsgUpdated { contact_id: i64, wire_id: String, text: String, pay: Option<String> },
+    /// Wallet accounts, balances and network.
+    TaoWallet(crate::wallet::WalletView),
+    /// A recovery phrase the user asked to see.
+    TaoPhrase { address: String, phrase: String },
     /// An own message finished uploading (it is now waiting to be picked up).
     Sent { contact_id: i64, wire_id: String },
     /// An own message never left this device; `error` says why.
@@ -413,9 +429,9 @@ pub enum Event {
     Error(String),
 }
 
-struct Live {
-    contact: Contact,
-    session: ContactSession,
+pub(crate) struct Live {
+    pub(crate) contact: Contact,
+    pub(crate) session: ContactSession,
     /// (wire_id, object key, seen-once, put at) for delivery receipts.
     pending: Vec<(String, String, bool, std::time::Instant)>,
 }
@@ -443,6 +459,7 @@ pub fn spawn_worker(
 
         let mut live: Vec<Live> = Vec::new();
         let mut groups: Vec<GroupLive> = Vec::new();
+        let mut jobs = crate::wallet::Jobs::new();
         let mut snapshot = Vec::new();
         for c in store.contacts().unwrap_or_default() {
             let msgs = store.messages(c.id).unwrap_or_default();
@@ -483,13 +500,17 @@ pub fn spawn_worker(
 
         loop {
             while let Ok(cmd) = outbound.try_recv() {
-                handle_cmd(cmd, &store, &me, &mut live, &mut groups, &events);
+                match cmd {
+                    Cmd::Tao(t) => crate::wallet::handle_cmd(t, &store, &mut live, &events, &jobs),
+                    cmd => handle_cmd(cmd, &store, &me, &mut live, &mut groups, &events),
+                }
             }
+            crate::wallet::drain(&store, &mut live, &events, &mut jobs);
             live.iter_mut().for_each(|l| persist_ratchet(&store, l));
 
             for l in &mut live {
                 for item in l.session.poll() {
-                    handle_item(item, l, &store, &events);
+                    handle_item(item, l, &store, &events, &jobs);
                 }
                 persist_ratchet(&store, l);
                 let cid = l.contact.id;
@@ -536,6 +557,7 @@ pub fn spawn_worker(
                                 reaction: None,
                                 sender_seat: Some(seat),
                                 read_ms: None,
+                                pay: None,
                             };
                             let _ = store.add_msg(gid, &msg);
                             let _ = events.send(Event::Received { contact_id: gid, msg });
@@ -768,6 +790,7 @@ fn handle_cmd(
                             reaction: None,
                             sender_seat: None,
                             read_ms: None,
+                            pay: None,
                         },
                     );
                     let _ = events.send(Event::Sent { contact_id, wire_id: wire_id.clone() });
@@ -794,6 +817,7 @@ fn handle_cmd(
                             reaction: None,
                             sender_seat: None,
                             read_ms: None,
+                            pay: None,
                         },
                     );
                     let _ = events.send(Event::Sent { contact_id, wire_id: wire_id.clone() });
@@ -855,6 +879,7 @@ fn handle_cmd(
                 }
             }
         }
+        Cmd::Tao(_) => {} // the worker routes these to `wallet`
         Cmd::MarkRead { contact_id } => {
             let Ok(ids) = store.mark_incoming_read(contact_id) else { return };
             if ids.is_empty() || !crate::demo::Settings::load().read_receipts {
@@ -934,6 +959,7 @@ fn handle_group_cmd(
                             reaction: None,
                             sender_seat: None,
                             read_ms: None,
+                            pay: None,
                         },
                     );
                 }
@@ -998,7 +1024,13 @@ fn handle_group_cmd(
     }
 }
 
-fn handle_item(item: ChatItem, l: &mut Live, store: &Store, events: &std::sync::mpsc::Sender<Event>) {
+fn handle_item(
+    item: ChatItem,
+    l: &mut Live,
+    store: &Store,
+    events: &std::sync::mpsc::Sender<Event>,
+    jobs: &crate::wallet::Jobs,
+) {
     let cid = l.contact.id;
     match item {
         ChatItem::Hello { pk } => {
@@ -1019,6 +1051,7 @@ fn handle_item(item: ChatItem, l: &mut Live, store: &Store, events: &std::sync::
                 reaction: None,
                 sender_seat: None,
                 read_ms: None,
+                pay: None,
             };
             let _ = store.add_msg(cid, &msg);
             let _ = events.send(Event::Received { contact_id: cid, msg });
@@ -1035,6 +1068,7 @@ fn handle_item(item: ChatItem, l: &mut Live, store: &Store, events: &std::sync::
                     reaction: None,
                     sender_seat: None,
                     read_ms: None,
+                    pay: None,
                 };
                 let _ = store.add_msg(cid, &msg);
                 let _ = events.send(Event::Received { contact_id: cid, msg });
@@ -1057,6 +1091,7 @@ fn handle_item(item: ChatItem, l: &mut Live, store: &Store, events: &std::sync::
         ChatItem::Timer { .. } => {}
         // Reciprocal: with receipts off we neither send nor record them.
         // Peer-controlled: set_read only matches our own messages here.
+        ChatItem::Tao(v) => crate::wallet::handle_item(v, l, store, events, jobs),
         ChatItem::Read { refs } => {
             if !crate::demo::Settings::load().read_receipts {
                 return;

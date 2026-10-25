@@ -78,6 +78,8 @@ pub struct StoredMsg {
     /// When it was read: by the peer for own messages (read receipts), by
     /// us for received ones. None = unread.
     pub read_ms: Option<i64>,
+    /// TAO payment card (JSON `tao::PayCard`); `text` is its plain summary.
+    pub pay: Option<String>,
 }
 
 pub struct Store {
@@ -149,6 +151,7 @@ impl Store {
         // Additive migration for pre-group databases; harmless when present.
         let _ = conn.execute("ALTER TABLE messages ADD COLUMN sender_seat INTEGER", []);
         let _ = conn.execute("ALTER TABLE messages ADD COLUMN read_ms INTEGER", []);
+        let _ = conn.execute("ALTER TABLE messages ADD COLUMN pay TEXT", []);
         Ok(Self { conn })
     }
 
@@ -264,10 +267,33 @@ impl Store {
     pub fn add_msg(&self, contact_id: i64, m: &StoredMsg) -> Result<(), Error> {
         self.conn
             .execute(
-                "INSERT INTO messages (contact_id, wire_id, mine, text, file_path, ts_ms, delivered, reaction, sender_seat)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                rusqlite::params![contact_id, m.wire_id, m.mine, m.text, m.file_path, m.ts_ms, m.delivered, m.reaction, m.sender_seat],
+                "INSERT INTO messages (contact_id, wire_id, mine, text, file_path, ts_ms, delivered, reaction, sender_seat, pay)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                rusqlite::params![contact_id, m.wire_id, m.mine, m.text, m.file_path, m.ts_ms, m.delivered, m.reaction, m.sender_seat, m.pay],
             )
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Replace a message's text and payment card (payment status changes).
+    pub fn set_msg(&self, contact_id: i64, wire_id: &str, text: &str, pay: Option<&str>) -> Result<(), Error> {
+        self.conn
+            .execute(
+                "UPDATE messages SET text = ?3, pay = ?4 WHERE contact_id = ?1 AND wire_id = ?2",
+                rusqlite::params![contact_id, wire_id, text, pay],
+            )
+            .map_err(|e| Error::Crypto(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Small key/value records inside the encrypted DB (wallet, settings).
+    pub fn kv_get(&self, k: &str) -> Option<String> {
+        self.conn.query_row("SELECT v FROM kv WHERE k = ?1", [k], |r| r.get(0)).ok()
+    }
+
+    pub fn kv_set(&self, k: &str, v: &str) -> Result<(), Error> {
+        self.conn
+            .execute("INSERT OR REPLACE INTO kv (k, v) VALUES (?1, ?2)", rusqlite::params![k, v])
             .map_err(|e| Error::Crypto(e.to_string()))?;
         Ok(())
     }
@@ -392,7 +418,7 @@ impl Store {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT wire_id, mine, text, file_path, ts_ms, delivered, reaction, sender_seat, read_ms
+                "SELECT wire_id, mine, text, file_path, ts_ms, delivered, reaction, sender_seat, read_ms, pay
                  FROM messages WHERE contact_id = ?1 ORDER BY ts_ms, id",
             )
             .map_err(|e| Error::Crypto(e.to_string()))?;
@@ -408,6 +434,7 @@ impl Store {
                     reaction: r.get(6)?,
                     sender_seat: r.get(7)?,
                     read_ms: r.get(8)?,
+                    pay: r.get(9)?,
                 })
             })
             .map_err(|e| Error::Crypto(e.to_string()))?;

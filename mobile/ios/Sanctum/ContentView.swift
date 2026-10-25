@@ -342,6 +342,13 @@ struct SettingsSheet: View {
                     }
                 }
                 Section {
+                    NavigationLink {
+                        WalletScreen()
+                    } label: {
+                        Label("TAO Wallet", systemImage: "bitcoinsign.circle")
+                    }
+                }
+                Section {
                     Toggle("Read Receipts", isOn: Binding(
                         get: { model.settings.readReceipts },
                         set: { model.settings.readReceipts = $0; model.saveSettings() }
@@ -393,6 +400,7 @@ struct ChatView: View {
     @State private var photoItem: PhotosPickerItem?
     @State private var showPhotoPicker = false
     @State private var showFileImporter = false
+    @State private var taoAction: TaoAction?
     @State private var showRename = false
     @State private var renameText = ""
     @State private var showCustomTimer = false
@@ -528,6 +536,21 @@ struct ChatView: View {
                     } label: {
                         Label("Choose File", systemImage: "folder")
                     }
+                    if chat.id >= 0 {
+                        Divider()
+                        Button { taoAction = .send } label: {
+                            Label("Send TAO", systemImage: "arrow.up.circle")
+                        }
+                        Button { taoAction = .request } label: {
+                            Label("Request TAO", systemImage: "arrow.down.circle")
+                        }
+                        Button { taoAction = .cheque } label: {
+                            Label("TAO Cheque", systemImage: "signature")
+                        }
+                        Button { model.taoShare(chat.id) } label: {
+                            Label("Share TAO Address", systemImage: "qrcode")
+                        }
+                    }
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 15, weight: .medium))
@@ -536,6 +559,7 @@ struct ChatView: View {
                         .background(Circle().fill(Color(.systemGray5)))
                 }
                 .disabled(chat.waiting)
+                .sheet(item: $taoAction) { a in TaoSheet(chatId: chat.id, action: a) }
                 .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
                 .onChange(of: photoItem) {
                     guard let item = photoItem else { return }
@@ -871,7 +895,9 @@ struct Bubble: View {
 
     @ViewBuilder
     private var bubbleContent: some View {
-        if let stored = msg.filePath, let path = resolveFile(stored),
+        if let card = msg.pay {
+            PayCardView(chatId: chatId, wireId: msg.id, mine: msg.mine, card: card)
+        } else if let stored = msg.filePath, let path = resolveFile(stored),
            let ui = UIImage(contentsOfFile: path) {
             Image(uiImage: ui)
                 .resizable()

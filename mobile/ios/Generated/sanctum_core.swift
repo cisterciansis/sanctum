@@ -558,6 +558,42 @@ public protocol ClientProtocol: AnyObject, Sendable {
      */
     func snapshotMessages(contactId: Int64)  -> [FfiMsg]
     
+    func taoCash(contactId: Int64, wireId: String) 
+    
+    func taoCheque(contactId: Int64, amount: String)  -> Bool
+    
+    func taoForget(address: String) 
+    
+    func taoImport(name: String, phrase: String) 
+    
+    func taoNew(name: String) 
+    
+    /**
+     * Pay `amount` ("1.5") to the contact's shared address or `to`. False if
+     * the amount is invalid. Confirm with the user before calling.
+     */
+    func taoPay(contactId: Int64, amount: String, to: String?, re: String?)  -> Bool
+    
+    /**
+     * Balances (and the offline snapshot); answers with a TaoWallet event.
+     */
+    func taoRefresh() 
+    
+    func taoRequest(contactId: Int64, amount: String, memo: String?)  -> Bool
+    
+    /**
+     * Answers with a TaoPhrase event. Call only on an explicit user action.
+     */
+    func taoReveal(address: String) 
+    
+    func taoSetTestnet(testnet: Bool) 
+    
+    func taoShare(contactId: Int64) 
+    
+    func taoUse(address: String) 
+    
+    func taoWatch(name: String, address: String) 
+    
     func unsend(contactId: Int64, wireId: String) 
     
 }
@@ -783,6 +819,118 @@ open func snapshotMessages(contactId: Int64) -> [FfiMsg]  {
 })
 }
     
+open func taoCash(contactId: Int64, wireId: String)  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_tao_cash(self.uniffiClonePointer(),
+        FfiConverterInt64.lower(contactId),
+        FfiConverterString.lower(wireId),$0
+    )
+}
+}
+    
+open func taoCheque(contactId: Int64, amount: String) -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_tao_cheque(self.uniffiClonePointer(),
+        FfiConverterInt64.lower(contactId),
+        FfiConverterString.lower(amount),$0
+    )
+})
+}
+    
+open func taoForget(address: String)  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_tao_forget(self.uniffiClonePointer(),
+        FfiConverterString.lower(address),$0
+    )
+}
+}
+    
+open func taoImport(name: String, phrase: String)  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_tao_import(self.uniffiClonePointer(),
+        FfiConverterString.lower(name),
+        FfiConverterString.lower(phrase),$0
+    )
+}
+}
+    
+open func taoNew(name: String)  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_tao_new(self.uniffiClonePointer(),
+        FfiConverterString.lower(name),$0
+    )
+}
+}
+    
+    /**
+     * Pay `amount` ("1.5") to the contact's shared address or `to`. False if
+     * the amount is invalid. Confirm with the user before calling.
+     */
+open func taoPay(contactId: Int64, amount: String, to: String?, re: String?) -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_tao_pay(self.uniffiClonePointer(),
+        FfiConverterInt64.lower(contactId),
+        FfiConverterString.lower(amount),
+        FfiConverterOptionString.lower(to),
+        FfiConverterOptionString.lower(re),$0
+    )
+})
+}
+    
+    /**
+     * Balances (and the offline snapshot); answers with a TaoWallet event.
+     */
+open func taoRefresh()  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_tao_refresh(self.uniffiClonePointer(),$0
+    )
+}
+}
+    
+open func taoRequest(contactId: Int64, amount: String, memo: String?) -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_tao_request(self.uniffiClonePointer(),
+        FfiConverterInt64.lower(contactId),
+        FfiConverterString.lower(amount),
+        FfiConverterOptionString.lower(memo),$0
+    )
+})
+}
+    
+    /**
+     * Answers with a TaoPhrase event. Call only on an explicit user action.
+     */
+open func taoReveal(address: String)  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_tao_reveal(self.uniffiClonePointer(),
+        FfiConverterString.lower(address),$0
+    )
+}
+}
+    
+open func taoSetTestnet(testnet: Bool)  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_tao_set_testnet(self.uniffiClonePointer(),
+        FfiConverterBool.lower(testnet),$0
+    )
+}
+}
+    
+open func taoShare(contactId: Int64)  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_tao_share(self.uniffiClonePointer(),
+        FfiConverterInt64.lower(contactId),$0
+    )
+}
+}
+    
+open func taoUse(address: String)  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_tao_use(self.uniffiClonePointer(),
+        FfiConverterString.lower(address),$0
+    )
+}
+}
+    
+open func taoWatch(name: String, address: String)  {try! rustCall() {
+    uniffi_sanctum_core_fn_method_client_tao_watch(self.uniffiClonePointer(),
+        FfiConverterString.lower(name),
+        FfiConverterString.lower(address),$0
+    )
+}
+}
+    
 open func unsend(contactId: Int64, wireId: String)  {try! rustCall() {
     uniffi_sanctum_core_fn_method_client_unsend(self.uniffiClonePointer(),
         FfiConverterInt64.lower(contactId),
@@ -949,6 +1097,10 @@ public struct FfiMsg {
      * Own messages: when the peer read them (read receipts on).
      */
     public var readMs: Int64?
+    /**
+     * TAO payment card, if this message is one.
+     */
+    public var pay: FfiPayCard?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -958,7 +1110,10 @@ public struct FfiMsg {
          */senderSeat: Int64?, 
         /**
          * Own messages: when the peer read them (read receipts on).
-         */readMs: Int64?) {
+         */readMs: Int64?, 
+        /**
+         * TAO payment card, if this message is one.
+         */pay: FfiPayCard?) {
         self.wireId = wireId
         self.mine = mine
         self.delivered = delivered
@@ -968,6 +1123,7 @@ public struct FfiMsg {
         self.tsMs = tsMs
         self.senderSeat = senderSeat
         self.readMs = readMs
+        self.pay = pay
     }
 }
 
@@ -1005,6 +1161,9 @@ extension FfiMsg: Equatable, Hashable {
         if lhs.readMs != rhs.readMs {
             return false
         }
+        if lhs.pay != rhs.pay {
+            return false
+        }
         return true
     }
 
@@ -1018,6 +1177,7 @@ extension FfiMsg: Equatable, Hashable {
         hasher.combine(tsMs)
         hasher.combine(senderSeat)
         hasher.combine(readMs)
+        hasher.combine(pay)
     }
 }
 
@@ -1038,7 +1198,8 @@ public struct FfiConverterTypeFfiMsg: FfiConverterRustBuffer {
                 filePath: FfiConverterOptionString.read(from: &buf), 
                 tsMs: FfiConverterInt64.read(from: &buf), 
                 senderSeat: FfiConverterOptionInt64.read(from: &buf), 
-                readMs: FfiConverterOptionInt64.read(from: &buf)
+                readMs: FfiConverterOptionInt64.read(from: &buf), 
+                pay: FfiConverterOptionTypeFfiPayCard.read(from: &buf)
         )
     }
 
@@ -1052,6 +1213,7 @@ public struct FfiConverterTypeFfiMsg: FfiConverterRustBuffer {
         FfiConverterInt64.write(value.tsMs, into: &buf)
         FfiConverterOptionInt64.write(value.senderSeat, into: &buf)
         FfiConverterOptionInt64.write(value.readMs, into: &buf)
+        FfiConverterOptionTypeFfiPayCard.write(value.pay, into: &buf)
     }
 }
 
@@ -1068,6 +1230,155 @@ public func FfiConverterTypeFfiMsg_lift(_ buf: RustBuffer) throws -> FfiMsg {
 #endif
 public func FfiConverterTypeFfiMsg_lower(_ value: FfiMsg) -> RustBuffer {
     return FfiConverterTypeFfiMsg.lower(value)
+}
+
+
+/**
+ * A payment card for display; amounts pre-formatted by the core.
+ */
+public struct FfiPayCard {
+    /**
+     * "paid" | "request" | "cheque"
+     */
+    public var kind: String
+    /**
+     * "sending" | "sent" | "verifying" | "verified" | "unverified" | "failed"
+     * | "open" | "settled" | "pending" | "cashing" | "cashed" | "bounced"
+     */
+    public var status: String
+    public var testnet: Bool
+    /**
+     * "1.5 τ"
+     */
+    public var amount: String
+    public var from: String
+    public var to: String
+    public var tx: String?
+    public var memo: String?
+    public var note: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * "paid" | "request" | "cheque"
+         */kind: String, 
+        /**
+         * "sending" | "sent" | "verifying" | "verified" | "unverified" | "failed"
+         * | "open" | "settled" | "pending" | "cashing" | "cashed" | "bounced"
+         */status: String, testnet: Bool, 
+        /**
+         * "1.5 τ"
+         */amount: String, from: String, to: String, tx: String?, memo: String?, note: String?) {
+        self.kind = kind
+        self.status = status
+        self.testnet = testnet
+        self.amount = amount
+        self.from = from
+        self.to = to
+        self.tx = tx
+        self.memo = memo
+        self.note = note
+    }
+}
+
+#if compiler(>=6)
+extension FfiPayCard: Sendable {}
+#endif
+
+
+extension FfiPayCard: Equatable, Hashable {
+    public static func ==(lhs: FfiPayCard, rhs: FfiPayCard) -> Bool {
+        if lhs.kind != rhs.kind {
+            return false
+        }
+        if lhs.status != rhs.status {
+            return false
+        }
+        if lhs.testnet != rhs.testnet {
+            return false
+        }
+        if lhs.amount != rhs.amount {
+            return false
+        }
+        if lhs.from != rhs.from {
+            return false
+        }
+        if lhs.to != rhs.to {
+            return false
+        }
+        if lhs.tx != rhs.tx {
+            return false
+        }
+        if lhs.memo != rhs.memo {
+            return false
+        }
+        if lhs.note != rhs.note {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(kind)
+        hasher.combine(status)
+        hasher.combine(testnet)
+        hasher.combine(amount)
+        hasher.combine(from)
+        hasher.combine(to)
+        hasher.combine(tx)
+        hasher.combine(memo)
+        hasher.combine(note)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiPayCard: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiPayCard {
+        return
+            try FfiPayCard(
+                kind: FfiConverterString.read(from: &buf), 
+                status: FfiConverterString.read(from: &buf), 
+                testnet: FfiConverterBool.read(from: &buf), 
+                amount: FfiConverterString.read(from: &buf), 
+                from: FfiConverterString.read(from: &buf), 
+                to: FfiConverterString.read(from: &buf), 
+                tx: FfiConverterOptionString.read(from: &buf), 
+                memo: FfiConverterOptionString.read(from: &buf), 
+                note: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiPayCard, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.kind, into: &buf)
+        FfiConverterString.write(value.status, into: &buf)
+        FfiConverterBool.write(value.testnet, into: &buf)
+        FfiConverterString.write(value.amount, into: &buf)
+        FfiConverterString.write(value.from, into: &buf)
+        FfiConverterString.write(value.to, into: &buf)
+        FfiConverterOptionString.write(value.tx, into: &buf)
+        FfiConverterOptionString.write(value.memo, into: &buf)
+        FfiConverterOptionString.write(value.note, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPayCard_lift(_ buf: RustBuffer) throws -> FfiPayCard {
+    return try FfiConverterTypeFfiPayCard.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiPayCard_lower(_ value: FfiPayCard) -> RustBuffer {
+    return FfiConverterTypeFfiPayCard.lower(value)
 }
 
 
@@ -1173,6 +1484,98 @@ public func FfiConverterTypeFfiSettings_lower(_ value: FfiSettings) -> RustBuffe
 }
 
 
+public struct FfiTaoAccount {
+    public var name: String
+    public var address: String
+    public var watchOnly: Bool
+    /**
+     * "12.5 τ", or None while unknown.
+     */
+    public var balance: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(name: String, address: String, watchOnly: Bool, 
+        /**
+         * "12.5 τ", or None while unknown.
+         */balance: String?) {
+        self.name = name
+        self.address = address
+        self.watchOnly = watchOnly
+        self.balance = balance
+    }
+}
+
+#if compiler(>=6)
+extension FfiTaoAccount: Sendable {}
+#endif
+
+
+extension FfiTaoAccount: Equatable, Hashable {
+    public static func ==(lhs: FfiTaoAccount, rhs: FfiTaoAccount) -> Bool {
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.address != rhs.address {
+            return false
+        }
+        if lhs.watchOnly != rhs.watchOnly {
+            return false
+        }
+        if lhs.balance != rhs.balance {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(name)
+        hasher.combine(address)
+        hasher.combine(watchOnly)
+        hasher.combine(balance)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiTaoAccount: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTaoAccount {
+        return
+            try FfiTaoAccount(
+                name: FfiConverterString.read(from: &buf), 
+                address: FfiConverterString.read(from: &buf), 
+                watchOnly: FfiConverterBool.read(from: &buf), 
+                balance: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiTaoAccount, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterString.write(value.address, into: &buf)
+        FfiConverterBool.write(value.watchOnly, into: &buf)
+        FfiConverterOptionString.write(value.balance, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTaoAccount_lift(_ buf: RustBuffer) throws -> FfiTaoAccount {
+    return try FfiConverterTypeFfiTaoAccount.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTaoAccount_lower(_ value: FfiTaoAccount) -> RustBuffer {
+    return FfiConverterTypeFfiTaoAccount.lower(value)
+}
+
+
 public struct FfiTorStatus {
     public var ready: Bool
     public var message: String
@@ -1242,6 +1645,84 @@ public func FfiConverterTypeFfiTorStatus_lower(_ value: FfiTorStatus) -> RustBuf
     return FfiConverterTypeFfiTorStatus.lower(value)
 }
 
+
+public struct FfiWallet {
+    public var testnet: Bool
+    public var active: String?
+    public var accounts: [FfiTaoAccount]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(testnet: Bool, active: String?, accounts: [FfiTaoAccount]) {
+        self.testnet = testnet
+        self.active = active
+        self.accounts = accounts
+    }
+}
+
+#if compiler(>=6)
+extension FfiWallet: Sendable {}
+#endif
+
+
+extension FfiWallet: Equatable, Hashable {
+    public static func ==(lhs: FfiWallet, rhs: FfiWallet) -> Bool {
+        if lhs.testnet != rhs.testnet {
+            return false
+        }
+        if lhs.active != rhs.active {
+            return false
+        }
+        if lhs.accounts != rhs.accounts {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(testnet)
+        hasher.combine(active)
+        hasher.combine(accounts)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiWallet: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiWallet {
+        return
+            try FfiWallet(
+                testnet: FfiConverterBool.read(from: &buf), 
+                active: FfiConverterOptionString.read(from: &buf), 
+                accounts: FfiConverterSequenceTypeFfiTaoAccount.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiWallet, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.testnet, into: &buf)
+        FfiConverterOptionString.write(value.active, into: &buf)
+        FfiConverterSequenceTypeFfiTaoAccount.write(value.accounts, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiWallet_lift(_ buf: RustBuffer) throws -> FfiWallet {
+    return try FfiConverterTypeFfiWallet.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiWallet_lower(_ value: FfiWallet) -> RustBuffer {
+    return FfiConverterTypeFfiWallet.lower(value)
+}
+
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
@@ -1264,6 +1745,12 @@ public enum FfiEvent {
     case sent(contactId: Int64, wireId: String
     )
     case read(contactId: Int64, wireIds: [String], tsMs: Int64
+    )
+    case msgUpdated(contactId: Int64, wireId: String, text: String, pay: FfiPayCard?
+    )
+    case taoWallet(wallet: FfiWallet
+    )
+    case taoPhrase(address: String, phrase: String
     )
     case sendFailed(contactId: Int64, wireId: String, message: String
     )
@@ -1322,19 +1809,28 @@ public struct FfiConverterTypeFfiEvent: FfiConverterRustBuffer {
         case 9: return .read(contactId: try FfiConverterInt64.read(from: &buf), wireIds: try FfiConverterSequenceString.read(from: &buf), tsMs: try FfiConverterInt64.read(from: &buf)
         )
         
-        case 10: return .sendFailed(contactId: try FfiConverterInt64.read(from: &buf), wireId: try FfiConverterString.read(from: &buf), message: try FfiConverterString.read(from: &buf)
+        case 10: return .msgUpdated(contactId: try FfiConverterInt64.read(from: &buf), wireId: try FfiConverterString.read(from: &buf), text: try FfiConverterString.read(from: &buf), pay: try FfiConverterOptionTypeFfiPayCard.read(from: &buf)
         )
         
-        case 11: return .removed(contactId: try FfiConverterInt64.read(from: &buf), wireId: try FfiConverterString.read(from: &buf)
+        case 11: return .taoWallet(wallet: try FfiConverterTypeFfiWallet.read(from: &buf)
         )
         
-        case 12: return .reaction(contactId: try FfiConverterInt64.read(from: &buf), refId: try FfiConverterString.read(from: &buf), emoji: try FfiConverterString.read(from: &buf)
+        case 12: return .taoPhrase(address: try FfiConverterString.read(from: &buf), phrase: try FfiConverterString.read(from: &buf)
         )
         
-        case 13: return .history(contactId: try FfiConverterInt64.read(from: &buf), msgs: try FfiConverterSequenceTypeFfiMsg.read(from: &buf)
+        case 13: return .sendFailed(contactId: try FfiConverterInt64.read(from: &buf), wireId: try FfiConverterString.read(from: &buf), message: try FfiConverterString.read(from: &buf)
         )
         
-        case 14: return .errorEvent(message: try FfiConverterString.read(from: &buf)
+        case 14: return .removed(contactId: try FfiConverterInt64.read(from: &buf), wireId: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 15: return .reaction(contactId: try FfiConverterInt64.read(from: &buf), refId: try FfiConverterString.read(from: &buf), emoji: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 16: return .history(contactId: try FfiConverterInt64.read(from: &buf), msgs: try FfiConverterSequenceTypeFfiMsg.read(from: &buf)
+        )
+        
+        case 17: return .errorEvent(message: try FfiConverterString.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -1395,34 +1891,53 @@ public struct FfiConverterTypeFfiEvent: FfiConverterRustBuffer {
             FfiConverterInt64.write(tsMs, into: &buf)
             
         
-        case let .sendFailed(contactId,wireId,message):
+        case let .msgUpdated(contactId,wireId,text,pay):
             writeInt(&buf, Int32(10))
+            FfiConverterInt64.write(contactId, into: &buf)
+            FfiConverterString.write(wireId, into: &buf)
+            FfiConverterString.write(text, into: &buf)
+            FfiConverterOptionTypeFfiPayCard.write(pay, into: &buf)
+            
+        
+        case let .taoWallet(wallet):
+            writeInt(&buf, Int32(11))
+            FfiConverterTypeFfiWallet.write(wallet, into: &buf)
+            
+        
+        case let .taoPhrase(address,phrase):
+            writeInt(&buf, Int32(12))
+            FfiConverterString.write(address, into: &buf)
+            FfiConverterString.write(phrase, into: &buf)
+            
+        
+        case let .sendFailed(contactId,wireId,message):
+            writeInt(&buf, Int32(13))
             FfiConverterInt64.write(contactId, into: &buf)
             FfiConverterString.write(wireId, into: &buf)
             FfiConverterString.write(message, into: &buf)
             
         
         case let .removed(contactId,wireId):
-            writeInt(&buf, Int32(11))
+            writeInt(&buf, Int32(14))
             FfiConverterInt64.write(contactId, into: &buf)
             FfiConverterString.write(wireId, into: &buf)
             
         
         case let .reaction(contactId,refId,emoji):
-            writeInt(&buf, Int32(12))
+            writeInt(&buf, Int32(15))
             FfiConverterInt64.write(contactId, into: &buf)
             FfiConverterString.write(refId, into: &buf)
             FfiConverterString.write(emoji, into: &buf)
             
         
         case let .history(contactId,msgs):
-            writeInt(&buf, Int32(13))
+            writeInt(&buf, Int32(16))
             FfiConverterInt64.write(contactId, into: &buf)
             FfiConverterSequenceTypeFfiMsg.write(msgs, into: &buf)
             
         
         case let .errorEvent(message):
-            writeInt(&buf, Int32(14))
+            writeInt(&buf, Int32(17))
             FfiConverterString.write(message, into: &buf)
             
         }
@@ -1519,6 +2034,30 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterString.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeFfiPayCard: FfiConverterRustBuffer {
+    typealias SwiftType = FfiPayCard?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFfiPayCard.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFfiPayCard.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -1651,6 +2190,31 @@ fileprivate struct FfiConverterSequenceTypeFfiMsg: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeFfiTaoAccount: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiTaoAccount]
+
+    public static func write(_ value: [FfiTaoAccount], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiTaoAccount.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiTaoAccount] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiTaoAccount]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiTaoAccount.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeFfiEvent: FfiConverterRustBuffer {
     typealias SwiftType = [FfiEvent]
 
@@ -1699,6 +2263,26 @@ public func parseDisappear(input: String) -> UInt64?  {
 })
 }
 /**
+ * "1.5" → rao as a decimal string, or None if it isn't a valid amount.
+ */
+public func taoParseAmount(input: String) -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+    uniffi_sanctum_core_fn_func_tao_parse_amount(
+        FfiConverterString.lower(input),$0
+    )
+})
+}
+/**
+ * A Bittensor (SS58 prefix 42) address with a valid checksum.
+ */
+public func taoValidAddress(input: String) -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_sanctum_core_fn_func_tao_valid_address(
+        FfiConverterString.lower(input),$0
+    )
+})
+}
+/**
  * Embedded Tor progress for the UI; None while Tor isn't in use.
  */
 public func torStatus() -> FfiTorStatus?  {
@@ -1730,6 +2314,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_func_parse_disappear() != 6956) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_func_tao_parse_amount() != 9029) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_func_tao_valid_address() != 31401) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_func_tor_status() != 2976) {
@@ -1787,6 +2377,45 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_method_client_snapshot_messages() != 34242) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_tao_cash() != 1638) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_tao_cheque() != 7372) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_tao_forget() != 18609) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_tao_import() != 53124) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_tao_new() != 10633) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_tao_pay() != 24777) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_tao_refresh() != 61901) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_tao_request() != 39143) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_tao_reveal() != 57878) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_tao_set_testnet() != 11820) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_tao_share() != 11336) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_tao_use() != 60375) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sanctum_core_checksum_method_client_tao_watch() != 59236) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sanctum_core_checksum_method_client_unsend() != 64185) {
