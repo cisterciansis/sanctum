@@ -365,6 +365,8 @@ struct ChatApp {
     /// TAO: amount for chat payments, phrase/address for adding accounts.
     tao_amount: Entity<InputState>,
     tao_key: Entity<InputState>,
+    /// Private payments explainer, opened from its ⓘ.
+    show_private_info: bool,
     /// Recovery phrase or API token for an existing mailbox account.
     mailbox_key: Entity<InputState>,
     wallet: Option<WalletView>,
@@ -460,6 +462,7 @@ impl ChatApp {
             tao_amount,
             tao_key,
             mailbox_key,
+            show_private_info: false,
             wallet: None,
             phrase: None,
             pending_tao: None,
@@ -741,7 +744,23 @@ impl ChatApp {
                     v_flex()
                         .flex_1()
                         .gap_0p5()
-                        .child(div().text_sm().text_color(rgb(p.text)).child("Private payments"))
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .items_center()
+                                .child(div().text_sm().text_color(rgb(p.text)).child("Private payments"))
+                                .child(
+                                    Button::new("tao-private-info")
+                                        .ghost()
+                                        .xsmall()
+                                        .label("ⓘ")
+                                        .tooltip("How private payments work")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.show_private_info = !this.show_private_info;
+                                            cx.notify();
+                                        })),
+                                ),
+                        )
                         .child(small(
                             match (private, self.settings.proxy_enabled) {
                                 (false, _) => "stealth addresses, split parts, MEV Shield and random delays".into(),
@@ -759,6 +778,27 @@ impl ChatApp {
                     cx.notify();
                 }))),
         );
+        if self.show_private_info {
+            const HOW: [(&str, &str); 7] = [
+                ("A private address", "Contacts get an st1… address instead of your normal one. Every payment to it lands on a fresh one-time address only you can spend; no one can tie those to you or to each other, and contacts can't look up your balance or history."),
+                ("Paid from one-time addresses", "Your payments come from your one-time addresses first, the smallest that covers it. If none does, it's split into up to 8 parts, each from a different address to a fresh address of theirs. Your addresses are never merged."),
+                ("Encrypted until it's in a block", "Each part goes through Bittensor's MEV Shield, encrypted to the next block producer, so no one watching pending transactions sees it or jumps ahead of it."),
+                ("Random timing", "Parts go out after random pauses, a few seconds to a minute and a half, so the chain doesn't line up with your chat."),
+                ("Tor hides where it came from", "With the proxy on, the network can't see your IP address either."),
+                ("Checked, not trusted", "When you're paid, your app works out each one-time address itself and checks every part on chain before it counts."),
+                ("What's still public", "Amounts, times, and that one address paid another; and where your TAO first came from, like an exchange. All standard Bittensor: no smart contracts, nothing new on chain."),
+            ];
+            let mut info = v_flex().w_full().gap_2().p_3().rounded(px(10.)).bg(rgb(p.surface));
+            for (title, text) in HOW {
+                info = info.child(
+                    v_flex()
+                        .gap_0p5()
+                        .child(div().text_sm().font_semibold().text_color(rgb(p.text)).child(title))
+                        .child(div().text_xs().text_color(rgb(p.sub)).child(text)),
+                );
+            }
+            col = col.child(info);
+        }
         let w = self.wallet.clone();
         let active = w.as_ref().and_then(|w| w.active.clone());
         for (i, a) in w.iter().flat_map(|w| w.accounts.iter()).enumerate() {

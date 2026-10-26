@@ -11,6 +11,7 @@ struct WalletScreen: View {
     @State private var revealFor: String?
     @State private var forgetFor: String?
     @State private var shown: FfiTaoAccount?
+    @State private var showPrivateInfo = false
 
     var body: some View {
         Form {
@@ -41,7 +42,14 @@ struct WalletScreen: View {
                     get: { model.settings.privatePayments },
                     set: { model.settings.privatePayments = $0; model.saveSettings() }
                 )) {
-                    Label("Private Payments", systemImage: "eye.slash")
+                    HStack(spacing: 6) {
+                        Label("Private Payments", systemImage: "eye.slash")
+                        Button { showPrivateInfo = true } label: {
+                            Image(systemName: "info.circle").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("How private payments work")
+                    }
                 }
             } footer: {
                 if model.settings.privatePayments && !model.settings.proxyEnabled {
@@ -91,6 +99,7 @@ struct WalletScreen: View {
             Text("Its keys are deleted from this device. Without its recovery phrase, its TAO can't be recovered.")
         }
         .sheet(item: $model.phrase) { p in PhraseSheet(phrase: p) }
+        .sheet(isPresented: $showPrivateInfo) { PrivatePaymentsInfo() }
         .sheet(item: $shown) { a in AccountSheet(account: a, active: model.wallet?.active == a.address) }
     }
 
@@ -141,6 +150,51 @@ struct WalletScreen: View {
 
     private func binding(_ s: Binding<String?>) -> Binding<Bool> {
         Binding(get: { s.wrappedValue != nil }, set: { if !$0 { s.wrappedValue = nil } })
+    }
+}
+
+/// How private payments work, in plain words.
+struct PrivatePaymentsInfo: View {
+    @Environment(\.dismiss) var dismiss
+
+    private let points: [(String, String, String)] = [
+        ("eye.slash.circle", "A private address",
+         "Contacts get an st1… address instead of your normal one. Every payment to it lands on a fresh one-time address that only you can spend. No one can tie those addresses to you or to each other, and contacts can't look up your balance or history."),
+        ("arrow.triangle.branch", "Paid from one-time addresses",
+         "Your payments come from your one-time addresses first, the smallest one that covers the amount. If none does, it's split into parts (up to 8), each from a different address to a fresh address of theirs. Your addresses are never merged."),
+        ("lock.shield", "Encrypted until it's in a block",
+         "Each part goes through Bittensor's MEV Shield: encrypted to the next block producer, so no one watching pending transactions can see it or jump ahead of it."),
+        ("timer", "Random timing",
+         "Parts go out after random pauses, a few seconds to a minute and a half, so the chain doesn't line up with your chat."),
+        ("network", "Tor hides where it came from",
+         "With Route via Tor on, the network can't see your IP address either."),
+        ("checkmark.seal", "Checked, not trusted",
+         "When you're paid, your app works out each one-time address itself and checks every part on chain before it counts."),
+        ("eye", "What's still public",
+         "Amounts, times, and that one address paid another. And where your TAO first came from, like an exchange. It's all standard Bittensor: no smart contracts, nothing new on chain."),
+    ]
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(points, id: \.1) { icon, title, text in
+                    HStack(alignment: .top, spacing: 14) {
+                        Image(systemName: icon)
+                            .font(.title3)
+                            .foregroundStyle(.tint)
+                            .frame(width: 28)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(title).font(.headline)
+                            Text(text).font(.callout).foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+            .navigationTitle("Private Payments")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
     }
 }
 
