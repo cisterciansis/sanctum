@@ -111,7 +111,7 @@ pub fn address_of(acc: &AccountId32) -> String {
 
 pub(crate) fn bs58_decode(s: &str) -> Option<Vec<u8>> {
     const ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-    if s.is_empty() || s.len() > 64 {
+    if s.is_empty() || s.len() > 128 {
         return None;
     }
     let mut out: Vec<u8> = Vec::new();
@@ -131,6 +131,25 @@ pub(crate) fn bs58_decode(s: &str) -> Option<Vec<u8>> {
     let mut v = vec![0u8; zeros];
     v.extend(out);
     Some(v)
+}
+
+pub(crate) fn bs58_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    let mut digits: Vec<u8> = Vec::new(); // base 58, most significant first
+    for &b in bytes {
+        let mut carry = b as u32;
+        for d in digits.iter_mut().rev() {
+            carry += (*d as u32) << 8;
+            *d = (carry % 58) as u8;
+            carry /= 58;
+        }
+        while carry > 0 {
+            digits.insert(0, (carry % 58) as u8);
+            carry /= 58;
+        }
+    }
+    let zeros = bytes.iter().take_while(|&&b| b == 0).count();
+    std::iter::repeat_n(b'1', zeros).chain(digits.iter().map(|&d| ALPHABET[d as usize])).map(char::from).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -339,19 +358,23 @@ pub fn send(net: Net, from: &Account, to: &str, rao: u128) -> Result<Receipt, Er
             return Err(Error::Transport(rejection(&format!("{why:?}"))));
         }
         tx.submit().await.map_err(err)?;
-        wait_for_inclusion(&api, tx.hash(), start).await
+        wait_for_inclusion(&api, tx.hash(), start, FULL_WAIT).await
     })
 }
 
+/// Polls of 4 s: three minutes for a plain transfer.
+const FULL_WAIT: u32 = 45;
+
 /// Scan finalized blocks from `start` for our extrinsic, then check it
-/// succeeded. HTTP has no subscriptions, so this polls every 4 s (≤ 3 min).
+/// succeeded. HTTP has no subscriptions, so this polls every 4 s.
 async fn wait_for_inclusion(
     api: &Api,
     hash: subxt::utils::H256,
     start: u64,
+    polls: u32,
 ) -> Result<Receipt, Error> {
     let mut next = start;
-    for _ in 0..45 {
+    for _ in 0..polls {
         let head = api.at_current_block().await.map_err(err)?.block_number();
         while next <= head {
             let at = api.at_block(next).await.map_err(err)?;
@@ -555,8 +578,157 @@ pub fn cash_cheque(net: Net, bytes: &[u8]) -> Result<Receipt, Error> {
             return Err(Error::Transport(rejection(&format!("{why:?}"))));
         }
         tx.submit().await.map_err(err)?;
-        wait_for_inclusion(&api, tx.hash(), start).await
+        wait_for_inclusion(&api, tx.hash(), start, FULL_WAIT).await
     })
+}
+
+// ---------------------------------------------------------------------------
+// Private sends: from any key (one-time addresses included), wrapped in
+// Bittensor's MEV Shield so the transfer is unreadable until it's in a block.
+// ---------------------------------------------------------------------------
+
+/// Below this an account is reaped; one-time addresses keep at least this.
+pub const EXISTENTIAL_RAO: u128 = 500;
+
+fn params(nonce: u64, blocks: u64) -> <<SubstrateConfig as subxt::Config>::TransactionExtensions as subxt::config::TransactionExtensions<SubstrateConfig>>::Params {
+    subxt::config::substrate::SubstrateExtrinsicParamsBuilder::new().nonce(nonce).mortal(blocks).build()
+}
+
+fn submit_encrypted(ciphertext: Vec<u8>) -> impl subxt::transactions::Payload {
+    subxt::dynamic::tx("MevShield", "submit_encrypted", vec![Value::from_bytes(ciphertext)])
+}
+
+/// Encrypt a signed extrinsic to a block author's announced key (ML-KEM-768
+/// then XChaCha20-Poly1305), in the wire format pallet-shield parses:
+/// twox128(key) ‖ len(kem_ct) as u16 LE ‖ kem_ct ‖ nonce(24) ‖ aead_ct.
+pub(crate) fn shield(enc_key: &[u8], inner: &[u8]) -> Result<Vec<u8>, Error> {
+    use chacha20poly1305::aead::{Aead, KeyInit};
+    use ml_kem::kem::{Encapsulate, EncapsulationKey};
+    use ml_kem::{EncodedSizeUser, MlKem768Params};
+    use rand_core::RngCore;
+    let ek = EncapsulationKey::<MlKem768Params>::from_bytes(enc_key.try_into().map_err(|_| err("bad shield key"))?);
+    let (kem_ct, shared) = ek.encapsulate(&mut rand_core::OsRng).map_err(|_| err("shield encapsulation failed"))?;
+    let mut nonce = [0u8; 24];
+    rand_core::OsRng.fill_bytes(&mut nonce);
+    let aead_ct = chacha20poly1305::XChaCha20Poly1305::new(shared.as_slice().into())
+        .encrypt(chacha20poly1305::XNonce::from_slice(&nonce), inner)
+        .map_err(|_| err("shield encryption failed"))?;
+    let mut out = sp_crypto_hashing::twox_128(enc_key).to_vec();
+    out.extend_from_slice(&(kem_ct.len() as u16).to_le_bytes());
+    out.extend_from_slice(&kem_ct);
+    out.extend_from_slice(&nonce);
+    out.extend_from_slice(&aead_ct);
+    Ok(out)
+}
+
+/// The key to encrypt to now: the author two blocks out (None if the chain
+/// isn't announcing one).
+async fn shield_key(at: &subxt::client::OnlineClientAtBlock<SubstrateConfig>) -> Result<Option<Vec<u8>>, Error> {
+    let addr = subxt::dynamic::storage::<(), Vec<u8>>("MevShield", "NextKey");
+    match at.storage().try_fetch(addr, ()).await.map_err(err)? {
+        Some(v) => Ok(Some(v.decode().map_err(err)?)),
+        None => Ok(None),
+    }
+}
+
+/// What one transfer from `key` costs in fees now, wrapper included, padded
+/// by half for price moves. Coin selection leaves this behind.
+pub fn fee_reserve(net: Net, key: &schnorrkel::Keypair) -> Result<u128, Error> {
+    let signer = crate::stealth::Signer(key.clone());
+    let me = AccountId32(key.public.to_bytes());
+    block_on(async {
+        let at = api(net).await?.at_current_block().await.map_err(err)?;
+        let n = at.transactions().account_nonce(&me).await.map_err(err)?;
+        let transfer = at.transactions().create_signed(&transfer_call(&me, 1), &signer, params(n, 32)).await.map_err(err)?;
+        // A wrapper the size of a real one: ML-KEM ciphertext plus a transfer.
+        let wrapper = at
+            .transactions()
+            .create_signed(&submit_encrypted(vec![0; 16 + 2 + 1088 + 24 + 16 + 160]), &signer, params(n, 8))
+            .await
+            .map_err(err)?;
+        let fees = fee_of(&at, transfer.encoded()).await? + fee_of(&at, wrapper.encoded()).await?;
+        Ok(fees + fees / 2)
+    })
+}
+
+/// The chain's fee quote for an extrinsic. Read by hand: Bittensor's balance
+/// is a u64, which subxt's own estimate can't decode. The answer is
+/// RuntimeDispatchInfo { weight, class, partial_fee: u64 }, fee last.
+async fn fee_of(at: &subxt::client::OnlineClientAtBlock<SubstrateConfig>, ext: &[u8]) -> Result<u128, Error> {
+    let mut args = ext.to_vec();
+    args.extend_from_slice(&(ext.len() as u32).to_le_bytes());
+    let out = at.runtime_apis().call_raw("TransactionPaymentApi_query_info", Some(&args)).await.map_err(err)?;
+    let fee: [u8; 8] = out.get(out.len().saturating_sub(8)..).and_then(|b| b.try_into().ok()).ok_or_else(|| err("no fee quote"))?;
+    Ok(u64::from_le_bytes(fee) as u128)
+}
+
+/// Send `rao` from `key` to `to`, inside the MEV Shield when the chain offers
+/// a key. The wrapper is signed by the same key at nonce n and the transfer
+/// at n+1, so the shield adds no new link between accounts. Returns the
+/// transfer's receipt and whether the shield carried it.
+pub fn send_shielded(net: Net, key: &schnorrkel::Keypair, to: &AccountId32, rao: u128) -> Result<(Receipt, bool), Error> {
+    let signer = crate::stealth::Signer(key.clone());
+    let me = AccountId32(key.public.to_bytes());
+    block_on(async {
+        let api = api(net).await?;
+        let at = api.at_current_block().await.map_err(err)?;
+        let start = at.block_number();
+        let n = at.transactions().account_nonce(&me).await.map_err(err)?;
+        let checked = |r: subxt::transactions::ValidationResult| match r {
+            subxt::transactions::ValidationResult::Invalid(why) => Err(Error::Transport(rejection(&format!("{why:?}")))),
+            _ => Ok(()),
+        };
+        let Some(enc) = shield_key(&at).await? else {
+            let tx = at.transactions().create_signed(&transfer_call(to, rao), &signer, params(n, 32)).await.map_err(err)?;
+            checked(tx.validate().await.map_err(err)?)?;
+            tx.submit().await.map_err(err)?;
+            return Ok((wait_for_inclusion(&api, tx.hash(), start, FULL_WAIT).await?, false));
+        };
+        let inner = at.transactions().create_signed(&transfer_call(to, rao), &signer, params(n + 1, 32)).await.map_err(err)?;
+        let outer =
+            at.transactions().create_signed(&submit_encrypted(shield(&enc, inner.encoded())?), &signer, params(n, 8)).await.map_err(err)?;
+        checked(outer.validate().await.map_err(err)?)?;
+        outer.submit().await.map_err(err)?;
+        // The wrapper lives 8 blocks; give it 10 (~2 min).
+        if let Ok(r) = wait_for_inclusion(&api, inner.hash(), start, 30).await {
+            return Ok((r, true));
+        }
+        // Past the wrapper's life the transfer either ran or never will, so
+        // the nonce says what to do without risking a double payment.
+        let at = api.at_current_block().await.map_err(err)?;
+        match at.transactions().account_nonce(&me).await.map_err(err)? - n {
+            // Wrapper never landed: send it plainly.
+            0 => {
+                let tx = at.transactions().create_signed(&transfer_call(to, rao), &signer, params(n, 32)).await.map_err(err)?;
+                checked(tx.validate().await.map_err(err)?)?;
+                tx.submit().await.map_err(err)?;
+                Ok((wait_for_inclusion(&api, tx.hash(), start, FULL_WAIT).await?, false))
+            }
+            // Wrapper landed but its key had rotated: the signed transfer
+            // inside is still valid, so submit that same transfer.
+            1 => {
+                let tx = at.transactions().from_bytes(inner.encoded().to_vec());
+                checked(tx.validate().await.map_err(err)?)?;
+                tx.submit().await.map_err(err)?;
+                Ok((wait_for_inclusion(&api, inner.hash(), start, FULL_WAIT).await?, false))
+            }
+            // It ran; we just didn't see it yet.
+            _ => Ok((wait_for_inclusion(&api, inner.hash(), start, FULL_WAIT).await?, true)),
+        }
+    })
+}
+
+/// The next nonce of an account.
+pub fn nonce(net: Net, acc: &AccountId32) -> Result<u64, Error> {
+    block_on(async {
+        let at = api(net).await?.at_current_block().await.map_err(err)?;
+        at.transactions().account_nonce(acc).await.map_err(err)
+    })
+}
+
+/// Free balance of an address, by its account id.
+pub fn balance_of(net: Net, acc: &AccountId32) -> Result<u128, Error> {
+    balance(net, &address_of(acc))
 }
 
 /// The chain validator's verdict in words.
@@ -607,6 +779,31 @@ fn unhex32(s: &str) -> Result<[u8; 32], Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Decrypt exactly as pallet-shield's `unshield` does, after parsing the
+    /// wire format as `ShieldedTransaction::parse` does.
+    #[test]
+    fn shield_round_trips_through_the_pallets_decryption() {
+        use chacha20poly1305::aead::{Aead, KeyInit};
+        use ml_kem::kem::Decapsulate;
+        use ml_kem::{Ciphertext, EncodedSizeUser, KemCore, MlKem768};
+        let (dk, ek) = MlKem768::generate(&mut rand_core::OsRng);
+        let enc_key = ek.as_bytes().to_vec();
+        assert_eq!(enc_key.len(), 1184);
+        let inner = b"a signed transfer extrinsic".to_vec();
+        let wire = shield(&enc_key, &inner).unwrap();
+
+        assert_eq!(wire[..16], sp_crypto_hashing::twox_128(&enc_key));
+        let kem_len = u16::from_le_bytes([wire[16], wire[17]]) as usize;
+        let kem_ct = &wire[18..18 + kem_len];
+        let nonce = &wire[18 + kem_len..18 + kem_len + 24];
+        let aead_ct = &wire[18 + kem_len + 24..];
+        let shared = dk.decapsulate(&Ciphertext::<MlKem768>::try_from(kem_ct).unwrap()).unwrap();
+        let plain = chacha20poly1305::XChaCha20Poly1305::new(shared.as_slice().into())
+            .decrypt(chacha20poly1305::XNonce::from_slice(nonce), aead_ct)
+            .unwrap();
+        assert_eq!(plain, inner);
+    }
 
     #[test]
     fn amounts() {
@@ -665,5 +862,20 @@ mod tests {
         forged[n - 3] ^= 1; // tamper with the amount
         let err = cash_cheque(Net::Main, &forged).unwrap_err().to_string();
         assert!(err.contains("BadProof"), "tampered cheque fails the signature: {err}");
+
+        // Private sends: mainnet announces a shield key, and a wrapper built
+        // to it from a one-time-style key passes everything but the fee.
+        let key = crate::stealth::account_key(me.phrase.as_deref().unwrap()).unwrap();
+        let enc = block_on(async { shield_key(&api(Net::Main).await?.at_current_block().await.map_err(super::err)?).await })
+            .unwrap()
+            .expect("MEV Shield key announced");
+        assert_eq!(enc.len(), 1184);
+        let err = send_shielded(Net::Main, &key, &parse_address(&them.address).unwrap(), RAO_PER_TAO)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not enough TAO"), "shielded wrapper stops at the fee: {err}");
+        let reserve = fee_reserve(Net::Main, &key).unwrap();
+        // Bittensor fees are well under a thousandth of a TAO.
+        assert!((1_000..RAO_PER_TAO / 1_000).contains(&reserve), "fee reserve {reserve}");
     }
 }

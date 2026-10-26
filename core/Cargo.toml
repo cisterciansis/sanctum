@@ -51,6 +51,15 @@ keyring = { version = "3", features = ["apple-native"] }
 # chain RPC goes over our own HTTP agent so Tor/proxy settings cover it.
 subxt = { version = "0.51", default-features = false, features = ["native", "runtime"] }
 subxt-signer = { version = "0.51", default-features = false, features = ["sr25519", "unstable-eth", "subxt", "std"] }
+# Private payments: stealth addresses from schnorrkel's own key exchange and
+# soft derivation (already in the tree via subxt-signer), and MEV Shield
+# encryption with the same crates Bittensor's runtime decrypts with.
+schnorrkel = { version = "0.11", features = ["aead"] }
+merlin = "3"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+sp-crypto-hashing = "0.1"
+ml-kem = "0.2.2"
+chacha20poly1305 = "0.10"
 arti-client = { version = "0.47", optional = true, default-features = false, features = ["tokio", "native-tls", "compression"] }
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 # Pin only: sysinfo 0.38 (via arti's tor-memquota) fails to build for iOS

@@ -37,6 +37,20 @@ struct WalletScreen: View {
                 Button("Watch an Address") { showWatch = true }
             }
             Section {
+                Toggle(isOn: Binding(
+                    get: { model.settings.privatePayments },
+                    set: { model.settings.privatePayments = $0; model.saveSettings() }
+                )) {
+                    Label("Private Payments", systemImage: "eye.slash")
+                }
+            } footer: {
+                if model.settings.privatePayments && !model.settings.proxyEnabled {
+                    Text("On. Turn on Route via Tor in Settings to hide your IP address too.")
+                } else {
+                    Text("Contacts get a private address that never shows your balance or history. Payments go out from one-time addresses, split into parts, encrypted until they're in a block (MEV Shield), with random delays.")
+                }
+            }
+            Section {
                 Toggle("Testnet", isOn: Binding(
                     get: { model.wallet?.testnet ?? false },
                     set: { model.taoSetTestnet($0) }
@@ -95,7 +109,12 @@ struct WalletScreen: View {
                         .truncationMode(.middle)
                 }
                 Spacer()
-                Text(a.balance ?? "…").monospacedDigit().foregroundStyle(.primary)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(a.balance ?? "…").monospacedDigit().foregroundStyle(.primary)
+                    if let p = a.privateBalance {
+                        Label(p, systemImage: "eye.slash").font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                    }
+                }
                 if active { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
             }
         }
@@ -289,7 +308,7 @@ struct TaoSheet: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("On \(net), to \(address.isEmpty ? "the address they shared" : address). Payments can't be undone.")
+                Text("On \(net), to \(address.isEmpty ? "the address they shared" : address).\(action == .send && model.settings.privatePayments ? " Goes privately, in shielded parts over a few minutes." : "") Payments can't be undone.")
             }
         }
         .presentationDetents([.medium, .large])
@@ -319,6 +338,11 @@ struct PayCardView: View {
                 addressBody
             } else {
                 amountBody
+                if card.parts > 0 {
+                    Label(card.parts > 1 ? "Private · \(card.parts) parts" : "Private", systemImage: "eye.slash")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .padding(12)
@@ -340,10 +364,12 @@ struct PayCardView: View {
     /// A shared address: in two clean lines (no hyphenation), with actions.
     @ViewBuilder
     private var addressBody: some View {
-        let mid = card.to.index(card.to.startIndex, offsetBy: card.to.count / 2)
-        Text("\(card.to[..<mid])\n\(card.to[mid...])")
+        // 24 per line: two even lines for an address, five for a private one.
+        Text(stride(from: 0, to: card.to.count, by: 24).map { i in
+            String(card.to.dropFirst(i).prefix(24))
+        }.joined(separator: "\n"))
             .font(.callout.monospaced())
-            .fixedSize(horizontal: false, vertical: true)
+            .fixedSize()
         HStack(spacing: 8) {
             Button {
                 UIPasteboard.general.string = card.to
@@ -388,6 +414,7 @@ struct PayCardView: View {
         switch card.kind {
         case "request": mine ? "You requested" : "Request"
         case "cheque": "Cheque"
+        case "address" where card.to.hasPrefix("st1"): mine ? "Your private TAO address" : "Private TAO address"
         case "address": mine ? "Your TAO address" : "TAO address"
         default: mine ? "You paid" : "Payment"
         }
@@ -395,6 +422,7 @@ struct PayCardView: View {
 
     private var statusText: String {
         switch card.status {
+        case "sending" where card.to.hasPrefix("st1") || model.settings.privatePayments: "Sending privately…"
         case "sending": "Sending to the chain…"
         case "sent": "Sent · finalized on chain"
         case "verifying": "Checking on chain…"

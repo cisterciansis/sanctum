@@ -46,6 +46,8 @@ pub struct FfiPayCard {
     pub tx: Option<String>,
     pub memo: Option<String>,
     pub note: Option<String>,
+    /// Private payment: how many parts (0 = an ordinary one).
+    pub parts: u32,
 }
 
 fn ffi_card(json: Option<&str>) -> Option<FfiPayCard> {
@@ -61,6 +63,7 @@ fn ffi_card(json: Option<&str>) -> Option<FfiPayCard> {
         tx: c.tx,
         memo: c.memo,
         note: c.note,
+        parts: c.legs.len() as u32,
     })
 }
 
@@ -71,6 +74,10 @@ pub struct FfiTaoAccount {
     pub watch_only: bool,
     /// "12.5 τ", or None while unknown.
     pub balance: Option<String>,
+    /// Held in one-time addresses received privately.
+    pub private_balance: Option<String>,
+    /// Private address (`st1…`); None for watch-only.
+    pub meta: Option<String>,
 }
 
 /// The Hippius account that pays for the mailboxes this device creates.
@@ -110,6 +117,8 @@ impl From<WalletView> for FfiWallet {
                     address: a.address,
                     watch_only: a.watch_only,
                     balance: a.balance.map(tao::format_tao),
+                    private_balance: a.private_balance.map(tao::format_tao),
+                    meta: a.meta,
                 })
                 .collect(),
             mailbox: w.mailbox.map(|m| FfiMailbox {
@@ -216,6 +225,7 @@ pub struct FfiSettings {
     pub proxy_url: String,
     pub disappear_secs: u64,
     pub read_receipts: bool,
+    pub private_payments: bool,
 }
 
 #[derive(uniffi::Object)]
@@ -456,6 +466,7 @@ impl Client {
             proxy_url: s.proxy_url,
             disappear_secs: s.disappear_secs,
             read_receipts: s.read_receipts,
+            private_payments: s.private_payments,
         }
     }
 
@@ -467,6 +478,7 @@ impl Client {
         s.proxy_url = new.proxy_url;
         s.disappear_secs = new.disappear_secs;
         s.read_receipts = new.read_receipts;
+        s.private_payments = new.private_payments;
         s.save();
     }
 

@@ -1595,6 +1595,10 @@ public struct FfiPayCard {
     public var tx: String?
     public var memo: String?
     public var note: String?
+    /**
+     * Private payment: how many parts (0 = an ordinary one).
+     */
+    public var parts: UInt32
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -1608,7 +1612,10 @@ public struct FfiPayCard {
          */status: String, testnet: Bool, 
         /**
          * "1.5 τ"
-         */amount: String, from: String, to: String, tx: String?, memo: String?, note: String?) {
+         */amount: String, from: String, to: String, tx: String?, memo: String?, note: String?, 
+        /**
+         * Private payment: how many parts (0 = an ordinary one).
+         */parts: UInt32) {
         self.kind = kind
         self.status = status
         self.testnet = testnet
@@ -1618,6 +1625,7 @@ public struct FfiPayCard {
         self.tx = tx
         self.memo = memo
         self.note = note
+        self.parts = parts
     }
 }
 
@@ -1655,6 +1663,9 @@ extension FfiPayCard: Equatable, Hashable {
         if lhs.note != rhs.note {
             return false
         }
+        if lhs.parts != rhs.parts {
+            return false
+        }
         return true
     }
 
@@ -1668,6 +1679,7 @@ extension FfiPayCard: Equatable, Hashable {
         hasher.combine(tx)
         hasher.combine(memo)
         hasher.combine(note)
+        hasher.combine(parts)
     }
 }
 
@@ -1688,7 +1700,8 @@ public struct FfiConverterTypeFfiPayCard: FfiConverterRustBuffer {
                 to: FfiConverterString.read(from: &buf), 
                 tx: FfiConverterOptionString.read(from: &buf), 
                 memo: FfiConverterOptionString.read(from: &buf), 
-                note: FfiConverterOptionString.read(from: &buf)
+                note: FfiConverterOptionString.read(from: &buf), 
+                parts: FfiConverterUInt32.read(from: &buf)
         )
     }
 
@@ -1702,6 +1715,7 @@ public struct FfiConverterTypeFfiPayCard: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.tx, into: &buf)
         FfiConverterOptionString.write(value.memo, into: &buf)
         FfiConverterOptionString.write(value.note, into: &buf)
+        FfiConverterUInt32.write(value.parts, into: &buf)
     }
 }
 
@@ -1728,16 +1742,18 @@ public struct FfiSettings {
     public var proxyUrl: String
     public var disappearSecs: UInt64
     public var readReceipts: Bool
+    public var privatePayments: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(theme: String, timestamps: Bool, proxyEnabled: Bool, proxyUrl: String, disappearSecs: UInt64, readReceipts: Bool) {
+    public init(theme: String, timestamps: Bool, proxyEnabled: Bool, proxyUrl: String, disappearSecs: UInt64, readReceipts: Bool, privatePayments: Bool) {
         self.theme = theme
         self.timestamps = timestamps
         self.proxyEnabled = proxyEnabled
         self.proxyUrl = proxyUrl
         self.disappearSecs = disappearSecs
         self.readReceipts = readReceipts
+        self.privatePayments = privatePayments
     }
 }
 
@@ -1766,6 +1782,9 @@ extension FfiSettings: Equatable, Hashable {
         if lhs.readReceipts != rhs.readReceipts {
             return false
         }
+        if lhs.privatePayments != rhs.privatePayments {
+            return false
+        }
         return true
     }
 
@@ -1776,6 +1795,7 @@ extension FfiSettings: Equatable, Hashable {
         hasher.combine(proxyUrl)
         hasher.combine(disappearSecs)
         hasher.combine(readReceipts)
+        hasher.combine(privatePayments)
     }
 }
 
@@ -1793,7 +1813,8 @@ public struct FfiConverterTypeFfiSettings: FfiConverterRustBuffer {
                 proxyEnabled: FfiConverterBool.read(from: &buf), 
                 proxyUrl: FfiConverterString.read(from: &buf), 
                 disappearSecs: FfiConverterUInt64.read(from: &buf), 
-                readReceipts: FfiConverterBool.read(from: &buf)
+                readReceipts: FfiConverterBool.read(from: &buf), 
+                privatePayments: FfiConverterBool.read(from: &buf)
         )
     }
 
@@ -1804,6 +1825,7 @@ public struct FfiConverterTypeFfiSettings: FfiConverterRustBuffer {
         FfiConverterString.write(value.proxyUrl, into: &buf)
         FfiConverterUInt64.write(value.disappearSecs, into: &buf)
         FfiConverterBool.write(value.readReceipts, into: &buf)
+        FfiConverterBool.write(value.privatePayments, into: &buf)
     }
 }
 
@@ -1831,17 +1853,33 @@ public struct FfiTaoAccount {
      * "12.5 τ", or None while unknown.
      */
     public var balance: String?
+    /**
+     * Held in one-time addresses received privately.
+     */
+    public var privateBalance: String?
+    /**
+     * Private address (`st1…`); None for watch-only.
+     */
+    public var meta: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
     public init(name: String, address: String, watchOnly: Bool, 
         /**
          * "12.5 τ", or None while unknown.
-         */balance: String?) {
+         */balance: String?, 
+        /**
+         * Held in one-time addresses received privately.
+         */privateBalance: String?, 
+        /**
+         * Private address (`st1…`); None for watch-only.
+         */meta: String?) {
         self.name = name
         self.address = address
         self.watchOnly = watchOnly
         self.balance = balance
+        self.privateBalance = privateBalance
+        self.meta = meta
     }
 }
 
@@ -1864,6 +1902,12 @@ extension FfiTaoAccount: Equatable, Hashable {
         if lhs.balance != rhs.balance {
             return false
         }
+        if lhs.privateBalance != rhs.privateBalance {
+            return false
+        }
+        if lhs.meta != rhs.meta {
+            return false
+        }
         return true
     }
 
@@ -1872,6 +1916,8 @@ extension FfiTaoAccount: Equatable, Hashable {
         hasher.combine(address)
         hasher.combine(watchOnly)
         hasher.combine(balance)
+        hasher.combine(privateBalance)
+        hasher.combine(meta)
     }
 }
 
@@ -1887,7 +1933,9 @@ public struct FfiConverterTypeFfiTaoAccount: FfiConverterRustBuffer {
                 name: FfiConverterString.read(from: &buf), 
                 address: FfiConverterString.read(from: &buf), 
                 watchOnly: FfiConverterBool.read(from: &buf), 
-                balance: FfiConverterOptionString.read(from: &buf)
+                balance: FfiConverterOptionString.read(from: &buf), 
+                privateBalance: FfiConverterOptionString.read(from: &buf), 
+                meta: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -1896,6 +1944,8 @@ public struct FfiConverterTypeFfiTaoAccount: FfiConverterRustBuffer {
         FfiConverterString.write(value.address, into: &buf)
         FfiConverterBool.write(value.watchOnly, into: &buf)
         FfiConverterOptionString.write(value.balance, into: &buf)
+        FfiConverterOptionString.write(value.privateBalance, into: &buf)
+        FfiConverterOptionString.write(value.meta, into: &buf)
     }
 }
 

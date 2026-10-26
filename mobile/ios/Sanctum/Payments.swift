@@ -170,6 +170,24 @@ struct AccountSheet: View {
                         .disabled(account.watchOnly)
                     }
                 }
+                if let meta = account.meta, model.settings.privatePayments {
+                    VStack(spacing: 6) {
+                        Text("Private address").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        // Fixed-width lines: wrapping would hyphenate it.
+                        Text(stride(from: 0, to: meta.count, by: 32).map { i in
+                            String(meta.dropFirst(i).prefix(32))
+                        }.joined(separator: "\n"))
+                            .font(.caption.monospaced())
+                            .multilineTextAlignment(.center)
+                            .fixedSize()
+                        HStack(spacing: 12) {
+                            Button { UIPasteboard.general.string = meta } label: { Label("Copy", systemImage: "doc.on.doc") }
+                            ShareLink(item: meta) { Label("Share", systemImage: "square.and.arrow.up") }
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
                 if account.watchOnly {
                     Text("Watch-only: this shows the balance and receives TAO, but can't send.")
                         .font(.footnote)

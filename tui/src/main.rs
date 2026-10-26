@@ -136,6 +136,7 @@ const TAO_COMMANDS: &[(&str, &str)] = &[
     ("/tao use <n> · forget <n>", "pick the paying account · remove one"),
     ("/tao phrase", "show the active account's recovery phrase"),
     ("/tao net main|test", "switch network"),
+    ("/tao private on|off", "stealth addresses, split parts, MEV Shield"),
     ("in a chat: /tao share", "send them your address"),
     ("/tao send <amt> [address]", "pay them (asks /yes first)"),
     ("/tao request <amt> [memo]", "ask them to pay you"),
@@ -829,6 +830,23 @@ impl App {
                 }
                 None => self.status = "usage: /tao net main|test".into(),
             },
+            "private" => {
+                let on = match rest {
+                    "on" => true,
+                    "off" => false,
+                    _ => !self.settings.private_payments,
+                };
+                let mut s = Settings::load();
+                s.private_payments = on;
+                s.save();
+                self.settings.private_payments = on;
+                self.show_wallet = true;
+                self.status = match (on, self.settings.proxy_enabled) {
+                    (false, _) => "private payments off".into(),
+                    (true, true) => "private payments on: stealth addresses, split parts, MEV Shield, random delays".into(),
+                    (true, false) => "private payments on · turn on Tor (Ctrl-S) to hide your IP too".into(),
+                };
+            }
             _ => return false,
         }
         true
@@ -857,7 +875,8 @@ impl App {
                 let what = taolib::format_tao(rao);
                 if verb == "send" {
                     let cmd = TaoCmd::Pay { contact_id: sel, wire_id, rao, to, re: None };
-                    self.confirm(format!("send {what} to {whom}"), cmd);
+                    let how = if self.settings.private_payments { " privately (parts go out over a few minutes)" } else { "" };
+                    self.confirm(format!("send {what} to {whom}{how}"), cmd);
                 } else {
                     let cmd = TaoCmd::Cheque { contact_id: sel, wire_id, rao };
                     self.confirm(format!("sign a {what} cheque to them"), cmd);
@@ -1356,12 +1375,25 @@ impl App {
             Span::raw("  τ TAO wallet").bold(),
             Span::styled(format!("  ·  {}  ·  r refresh · esc close", self.net_label()), dim),
         ]));
+        let private = self.settings.private_payments;
+        rows.push(Line::from(Span::styled(
+            if private {
+                "  private payments ON: stealth addresses, split parts, MEV Shield, random delays  (/tao private off)"
+            } else {
+                "  private payments off  (/tao private on)"
+            },
+            if private { Style::default().fg(Color::Green) } else { dim },
+        )));
         rows.push(Line::raw(""));
         match &self.wallet {
             Some(w) if !w.accounts.is_empty() => {
                 for (i, a) in w.accounts.iter().enumerate() {
                     let active = w.active.as_deref() == Some(a.address.as_str());
                     let bal = a.balance.map(taolib::format_tao).unwrap_or_else(|| "…".into());
+                    let bal = match a.private_balance {
+                        Some(p) => format!("{bal} + {} private", taolib::format_tao(p)),
+                        None => bal,
+                    };
                     let kind = if a.watch_only { " (watch-only)" } else { "" };
                     rows.push(Line::raw(format!(
                         "  {} {}{} {:<10} {}  {}",
@@ -1372,6 +1404,10 @@ impl App {
                         a.address,
                         bal
                     )));
+                    if let (true, true, Some(m)) = (private, active, &a.meta) {
+                        rows.push(Line::from(Span::styled("      private address (/tao share sends it)", dim)));
+                        rows.push(Line::raw(format!("      {m}")));
+                    }
                 }
             }
             _ => rows.push(Line::raw("  No accounts yet. /tao new creates one; /tao import <words> restores.")),

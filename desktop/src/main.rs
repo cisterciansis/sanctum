@@ -731,6 +731,34 @@ impl ChatApp {
                         })),
                 ),
         );
+        let private = self.settings.private_payments;
+        col = col.child(
+            h_flex()
+                .w_full()
+                .gap_3()
+                .items_center()
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .gap_0p5()
+                        .child(div().text_sm().text_color(rgb(p.text)).child("Private payments"))
+                        .child(small(
+                            match (private, self.settings.proxy_enabled) {
+                                (false, _) => "stealth addresses, split parts, MEV Shield and random delays".into(),
+                                (true, true) => "on: contacts get a private address; payments go out in shielded parts".into(),
+                                (true, false) => "on · turn on the proxy (Tor) above to hide your IP too".into(),
+                            },
+                            if private && !self.settings.proxy_enabled { 0xFF9F0A } else { p.sub },
+                        )),
+                )
+                .child(Switch::new("tao-private").checked(private).on_click(cx.listener(|this, v: &bool, _, cx| {
+                    let mut s = Settings::load();
+                    s.private_payments = *v;
+                    s.save();
+                    this.settings.private_payments = *v;
+                    cx.notify();
+                }))),
+        );
         let w = self.wallet.clone();
         let active = w.as_ref().and_then(|w| w.active.clone());
         for (i, a) in w.iter().flat_map(|w| w.accounts.iter()).enumerate() {
@@ -754,6 +782,7 @@ impl ChatApp {
                             .text_color(rgb(p.text))
                             .child(a.balance.map(tao::format_tao).unwrap_or_else(|| "…".into())),
                     )
+                    .when_some(a.private_balance, |d, b| d.child(small(format!("+ {} private", tao::format_tao(b)), p.sub)))
                     .child(Button::new(("tao-copy", i)).ghost().label("Copy").on_click(cx.listener(
                         move |_, _, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(addr.clone())),
                     )))
@@ -770,6 +799,21 @@ impl ChatApp {
                         ))
                     }),
             );
+            if let (true, true, Some(meta)) = (private, is_active, a.meta.clone()) {
+                let copy = meta.clone();
+                col = col.child(
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .items_center()
+                        .pl_4()
+                        .child(small("Private address".into(), p.sub))
+                        .child(div().flex_1().min_w_0().text_xs().font_family("Menlo").text_color(rgb(p.text)).child(meta))
+                        .child(Button::new(("tao-copy-meta", i)).ghost().label("Copy").on_click(cx.listener(
+                            move |_, _, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone())),
+                        ))),
+                );
+            }
         }
         col = col.child(
             h_flex()
@@ -830,7 +874,8 @@ impl ChatApp {
             let what = tao::format_tao(rao);
             match verb {
                 "send" => {
-                    let prompt = format!("Send {what} to their shared address on {}?", this.net_label());
+                    let how = if this.settings.private_payments { " privately, in shielded parts over a few minutes" } else { "" };
+                    let prompt = format!("Send {what} to their shared address on {}{how}?", this.net_label());
                     let cmd = TaoCmd::Pay { contact_id, wire_id, rao, to: None, re: None };
                     this.pending_tao = Some((prompt, cmd));
                 }
@@ -2110,7 +2155,12 @@ impl Render for ChatApp {
                     let mid = addr.char_indices().nth(addr.chars().count() / 2).map_or(addr.len(), |(b, _)| b);
                     v_flex()
                         .gap_1p5()
-                        .child(label(if m.mine { "τ  YOUR TAO ADDRESS" } else { "τ  TAO ADDRESS" }))
+                        .child(label(match (m.mine, addr.starts_with(sanctum_core::stealth::META_PREFIX)) {
+                            (true, true) => "τ  YOUR PRIVATE TAO ADDRESS",
+                            (false, true) => "τ  PRIVATE TAO ADDRESS",
+                            (true, false) => "τ  YOUR TAO ADDRESS",
+                            (false, false) => "τ  TAO ADDRESS",
+                        }))
                         .child(
                             div()
                                 .text_sm()

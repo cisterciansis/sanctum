@@ -24,6 +24,11 @@ down.
 - **Open and checked.** AGPL-3.0; protocol laws machine-checked in Bend.
 - **No sign-up.** Your mailbox account is a 12-word phrase made on your
   device and funded with TAO: no email, phone number or OAuth.
+- **Private TAO payments** (opt-in). Stealth addresses after Bitcoin's silent
+  payments, on sr25519: every payment lands on a fresh one-time address, is
+  paid from your own one-time addresses (in parts when one isn't enough),
+  stays encrypted in Bittensor's MEV Shield until it's in a block, and goes out
+  after a random delay. No contracts, no new chain code.
 
 ## Install
 

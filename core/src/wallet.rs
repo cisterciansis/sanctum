@@ -8,10 +8,13 @@
 
 use std::sync::mpsc::{channel, Receiver, Sender};
 
+use subxt::utils::AccountId32;
+
 use serde::{Deserialize, Serialize};
 
 use crate::contact::{Event, Live};
 use crate::store::{Store, StoredMsg};
+use crate::stealth::{self, StealthKeys};
 use crate::tao::{self, Account, Net, Receipt, Snapshot};
 
 // ---------------------------------------------------------------------------
@@ -26,6 +29,19 @@ struct Wallet {
     /// Cheques we signed that may not have landed yet, oldest nonce first.
     #[serde(default)]
     issued: Vec<Issued>,
+    /// One-time addresses paid to us privately: spendable with the owner
+    /// account's spend key and the tweak.
+    #[serde(default)]
+    notes: Vec<Note>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct Note {
+    /// The account whose stealth keys own it.
+    owner: String,
+    address: String,
+    /// Chain code, 0x-hex.
+    tweak: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -67,6 +83,24 @@ fn snap_key(net: Net, address: &str) -> String {
 
 fn peer_key(l: &Live) -> String {
     format!("tao/peer/{}", l.contact.bucket_in)
+}
+
+/// Their private (stealth) address, if they shared one.
+fn peer_meta_key(l: &Live) -> String {
+    format!("tao/peermeta/{}", l.contact.bucket_in)
+}
+
+fn private_mode() -> bool {
+    crate::demo::Settings::load().private_payments
+}
+
+/// A plain SS58 address or a private `st1…` one.
+fn check_payee(to: &str) -> Result<(), String> {
+    if to.starts_with(stealth::META_PREFIX) {
+        stealth::Meta::parse(to).map(|_| ()).map_err(|e| e.to_string())
+    } else {
+        tao::parse_address(to).map(|_| ()).map_err(|e| e.to_string())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -136,7 +170,25 @@ pub struct PayCard {
     /// Why it failed / bounced.
     #[serde(default)]
     pub note: Option<String>,
+    /// A private payment's parts, one transfer each (empty otherwise).
+    #[serde(default)]
+    pub legs: Vec<Leg>,
 }
+
+/// One transfer of a private payment: from one of the payer's addresses to a
+/// one-time address of the payee (index `k` derives it).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Leg {
+    pub from: String,
+    pub to: String,
+    pub k: u64,
+    pub rao: String,
+    pub tx: String,
+    pub block: String,
+}
+
+/// Most parts a private payment is split into.
+const MAX_LEGS: usize = 8;
 
 impl PayCard {
     /// A stored card (`StoredMsg::pay`), for clients.
@@ -153,7 +205,17 @@ impl PayCard {
         let net = if self.net == Net::Test { " (testnet)" } else { "" };
         let memo = self.memo.as_deref().map(|m| format!(" · {m}")).unwrap_or_default();
         let why = self.note.as_deref().map(|n| format!(": {n}")).unwrap_or_default();
+        let private = if self.legs.len() > 1 {
+            format!(" · private, {} parts", self.legs.len())
+        } else if !self.legs.is_empty() {
+            " · private".into()
+        } else {
+            String::new()
+        };
         let s = match (self.kind, self.status) {
+            (PayKind::Address, _) if self.to.starts_with(stealth::META_PREFIX) => {
+                format!("Private TAO address: {}", self.to)
+            }
             (PayKind::Address, _) => format!("TAO address: {}", self.to),
             (PayKind::Paid, PayStatus::Sending) => format!("Sending {amt}…"),
             (PayKind::Paid, PayStatus::Sent) => format!("Sent {amt}"),
@@ -169,7 +231,7 @@ impl PayCard {
             (_, PayStatus::Failed) => format!("Payment failed: {amt}{why}"),
             (_, s) => format!("{amt} · {s:?}"),
         };
-        format!("τ {s}{net}")
+        format!("τ {s}{private}{net}")
     }
 
     /// Everything a peer's card claims, checked before we act on it.
@@ -178,9 +240,24 @@ impl PayCard {
         if rao == 0 || rao > 21_000_000 * tao::RAO_PER_TAO {
             return Err("amount out of range".into());
         }
-        tao::parse_address(&self.to).map_err(|e| e.to_string())?;
+        check_payee(&self.to)?;
         if !self.from.is_empty() {
             tao::parse_address(&self.from).map_err(|e| e.to_string())?;
+        }
+        if self.legs.len() > MAX_LEGS {
+            return Err("too many parts".into());
+        }
+        let mut sum = 0u128;
+        for leg in &self.legs {
+            tao::parse_address(&leg.from).map_err(|e| e.to_string())?;
+            tao::parse_address(&leg.to).map_err(|e| e.to_string())?;
+            sum += leg.rao.parse::<u128>().map_err(|_| "bad amount")?;
+            if leg.tx.len() > 80 || leg.block.len() > 80 {
+                return Err("oversized field".into());
+            }
+        }
+        if !self.legs.is_empty() && sum != rao {
+            return Err("parts don't add up".into());
         }
         if self.memo.as_ref().is_some_and(|m| m.chars().count() > 140)
             || self.cheque.as_ref().is_some_and(|c| c.len() > 8192)
@@ -233,6 +310,10 @@ pub struct AccountView {
     pub watch_only: bool,
     /// None while unknown (offline or not fetched yet).
     pub balance: Option<u128>,
+    /// Held in one-time addresses received privately.
+    pub private_balance: Option<u128>,
+    /// Its private address (`st1…`); None for watch-only.
+    pub meta: Option<String>,
 }
 
 /// The Hippius account that pays for the mailboxes we create.
@@ -272,6 +353,8 @@ pub enum Done {
     Funded { tao: String },
     MailboxFailed(String),
     Card { contact_id: i64, wire_id: String, card: PayCard, tell_peer: bool },
+    /// A private payment we received and checked: its one-time addresses.
+    Received { contact_id: i64, wire_id: String, card: PayCard, notes: Vec<(String, String, String)> },
     Error(String),
 }
 
@@ -282,12 +365,25 @@ pub struct Jobs {
     balances: Vec<(String, Option<u128>)>,
     mailbox: MailboxView,
     tao_usd: Option<f64>,
+    /// Private addresses by account (deriving them takes a key stretch).
+    metas: std::cell::RefCell<std::collections::HashMap<String, String>>,
 }
 
 impl Jobs {
     pub fn new() -> Self {
         let (tx, rx) = channel();
-        Self { tx, rx, balances: Vec::new(), mailbox: MailboxView::default(), tao_usd: None }
+        Self { tx, rx, balances: Vec::new(), mailbox: MailboxView::default(), tao_usd: None, metas: Default::default() }
+    }
+
+    fn meta_of(&self, a: &Account) -> Option<String> {
+        let phrase = a.phrase.as_deref()?;
+        let mut metas = self.metas.borrow_mut();
+        if let Some(m) = metas.get(&a.address) {
+            return Some(m.clone());
+        }
+        let m = StealthKeys::of(phrase).ok()?.meta().encode();
+        metas.insert(a.address.clone(), m.clone());
+        Some(m)
     }
 
     fn spawn(&self, f: impl FnOnce() -> Done + Send + 'static) {
@@ -306,11 +402,19 @@ fn view(store: &Store, jobs: &Jobs) -> WalletView {
         accounts: w
             .accounts
             .iter()
-            .map(|a| AccountView {
-                name: a.name.clone(),
-                address: a.address.clone(),
-                watch_only: !a.can_sign(),
-                balance: jobs.balances.iter().find(|(x, _)| *x == a.address).and_then(|(_, b)| *b),
+            .map(|a| {
+                let bal = |addr: &str| jobs.balances.iter().find(|(x, _)| x == addr).and_then(|(_, b)| *b);
+                let notes: Vec<_> = w.notes.iter().filter(|n| n.owner == a.address).collect();
+                AccountView {
+                    name: a.name.clone(),
+                    address: a.address.clone(),
+                    watch_only: !a.can_sign(),
+                    balance: bal(&a.address),
+                    private_balance: (!notes.is_empty())
+                        .then(|| notes.iter().map(|n| bal(&n.address)).sum::<Option<u128>>())
+                        .flatten(),
+                    meta: jobs.meta_of(a),
+                }
             })
             .collect(),
         note: None,
@@ -435,6 +539,7 @@ fn address_card(net: Net, address: &str) -> PayCard {
         memo: None,
         re: None,
         note: None,
+        legs: Vec::new(),
     }
 }
 
@@ -462,7 +567,8 @@ pub(crate) fn handle_cmd(cmd: TaoCmd, store: &Store, live: &mut [Live], events: 
     let mut w = Wallet::load(store);
     match cmd {
         TaoCmd::Refresh => {
-            let accounts: Vec<String> = w.accounts.iter().map(|a| a.address.clone()).collect();
+            let accounts: Vec<String> =
+                w.accounts.iter().map(|a| a.address.clone()).chain(w.notes.iter().map(|n| n.address.clone())).collect();
             let signer = w.active().filter(|a| a.can_sign()).map(|a| a.address.clone());
             let issued = w.issued.clone();
             let net = net();
@@ -538,9 +644,15 @@ pub(crate) fn handle_cmd(cmd: TaoCmd, store: &Store, live: &mut [Live], events: 
             handle_cmd(TaoCmd::Refresh, store, live, events, jobs);
         }
         TaoCmd::Share { contact_id } => {
-            let Some(addr) = w.active.clone() else { return fail("no wallet yet".into()) };
+            let Some(acc) = w.active().cloned() else { return fail("no wallet yet".into()) };
             let Some(l) = live.iter_mut().find(|l| l.contact.id == contact_id) else { return };
-            match l.session.send_control(&serde_json::json!({ "t": "taoaddr", "a": addr })) {
+            // Private: the stealth address, so they never learn an address
+            // they could look up.
+            let (addr, msg) = match jobs.meta_of(&acc).filter(|_| private_mode()) {
+                Some(m) => (m.clone(), serde_json::json!({ "t": "taoaddr", "m": m })),
+                None => (acc.address.clone(), serde_json::json!({ "t": "taoaddr", "a": acc.address })),
+            };
+            match l.session.send_control(&msg) {
                 // Both sides of the chat should show it, not just theirs.
                 Ok(key) => {
                     let wire_id = ulid::Ulid::new().to_string();
@@ -601,13 +713,45 @@ pub(crate) fn handle_cmd(cmd: TaoCmd, store: &Store, live: &mut [Live], events: 
                 return fail("no signing account (create or import one; watch-only can't pay)".into());
             };
             let Some(l) = live.iter().find(|l| l.contact.id == contact_id) else { return };
-            let Some(to) = to.or_else(|| store.kv_get(&peer_key(l))) else {
+            let private = private_mode();
+            let shared = || private.then(|| store.kv_get(&peer_meta_key(l))).flatten().or_else(|| store.kv_get(&peer_key(l)));
+            let Some(to) = to.or_else(shared) else {
                 return fail("they haven't shared a TAO address; ask them to, or give one".into());
             };
-            if let Err(e) = tao::parse_address(&to) {
-                return fail(e.to_string());
+            if let Err(e) = check_payee(&to) {
+                return fail(e);
             }
             let net = net();
+            // To a private address, or in private mode: notes, split parts,
+            // MEV Shield and jitter.
+            if private || to.starts_with(stealth::META_PREFIX) {
+                let card = PayCard {
+                    kind: PayKind::Paid,
+                    status: PayStatus::Sending,
+                    net,
+                    rao: rao.to_string(),
+                    from: String::new(),
+                    to: to.clone(),
+                    tx: None,
+                    block: None,
+                    cheque: None,
+                    memo: None,
+                    re,
+                    note: None,
+                    legs: Vec::new(),
+                };
+                post_card(store, events, contact_id, &wire_id, true, &card);
+                let payer = Payer {
+                    phrase: from.phrase.clone().unwrap_or_default(),
+                    notes: w
+                        .notes
+                        .iter()
+                        .filter(|n| n.owner == from.address)
+                        .filter_map(|n| tao::unhex(&n.tweak).ok()?.try_into().ok())
+                        .collect(),
+                };
+                return jobs.spawn(move || pay_privately(net, payer, contact_id, wire_id, card));
+            }
             let mut card = PayCard {
                 kind: PayKind::Paid,
                 status: PayStatus::Sending,
@@ -621,6 +765,7 @@ pub(crate) fn handle_cmd(cmd: TaoCmd, store: &Store, live: &mut [Live], events: 
                 memo: None,
                 re,
                 note: None,
+                legs: Vec::new(),
             };
             post_card(store, events, contact_id, &wire_id, true, &card);
             jobs.spawn(move || {
@@ -640,7 +785,8 @@ pub(crate) fn handle_cmd(cmd: TaoCmd, store: &Store, live: &mut [Live], events: 
             });
         }
         TaoCmd::Request { contact_id, wire_id, rao, memo } => {
-            let Some(to) = w.active.clone() else { return fail("no wallet yet".into()) };
+            let Some(acc) = w.active().cloned() else { return fail("no wallet yet".into()) };
+            let to = jobs.meta_of(&acc).filter(|_| private_mode()).unwrap_or(acc.address);
             let card = PayCard {
                 kind: PayKind::Request,
                 status: PayStatus::Open,
@@ -654,6 +800,7 @@ pub(crate) fn handle_cmd(cmd: TaoCmd, store: &Store, live: &mut [Live], events: 
                 memo: memo.map(|m| m.chars().take(140).collect()),
                 re: None,
                 note: None,
+                legs: Vec::new(),
             };
             send_card(store, live, events, contact_id, &wire_id, &card);
         }
@@ -663,7 +810,7 @@ pub(crate) fn handle_cmd(cmd: TaoCmd, store: &Store, live: &mut [Live], events: 
             };
             let Some(l) = live.iter().find(|l| l.contact.id == contact_id) else { return };
             let Some(to) = store.kv_get(&peer_key(l)) else {
-                return fail("they haven't shared a TAO address yet".into());
+                return fail("cheques need their plain TAO address; with a private address, send a payment instead".into());
             };
             let net = net();
             // Signed from the last online snapshot: works with no network.
@@ -707,6 +854,7 @@ pub(crate) fn handle_cmd(cmd: TaoCmd, store: &Store, live: &mut [Live], events: 
                 memo: None,
                 re: None,
                 note: None,
+                legs: Vec::new(),
             };
             send_card(store, live, events, contact_id, &wire_id, &card);
         }
@@ -756,6 +904,12 @@ pub(crate) fn handle_item(v: serde_json::Value, l: &mut Live, store: &Store, eve
     let cid = l.contact.id;
     match v.get("t").and_then(|t| t.as_str()) {
         Some("taoaddr") => {
+            if let Some(m) = v.get("m").and_then(|m| m.as_str()).filter(|m| stealth::Meta::parse(m).is_ok()) {
+                let _ = store.kv_set(&peer_meta_key(l), m);
+                let wire_id = ulid::Ulid::new().to_string();
+                post_card(store, events, cid, &wire_id, false, &address_card(net(), m));
+                return;
+            }
             let Some(a) = v.get("a").and_then(|a| a.as_str()) else { return };
             if let Ok(acc) = tao::parse_address(a) {
                 let a = tao::address_of(&acc);
@@ -782,6 +936,12 @@ pub(crate) fn handle_item(v: serde_json::Value, l: &mut Live, store: &Store, eve
                     card.status = PayStatus::Open;
                     post_card(store, events, cid, &id, false, &card);
                 }
+                PayKind::Paid if !card.legs.is_empty() => {
+                    card.status = PayStatus::Verifying;
+                    post_card(store, events, cid, &id, false, &card);
+                    let accounts = Wallet::load(store).accounts.into_iter().map(|a| (a.address, a.phrase)).collect();
+                    jobs.spawn(move || check_private(cid, id, card, accounts));
+                }
                 PayKind::Paid => {
                     card.status = PayStatus::Verifying;
                     post_card(store, events, cid, &id, false, &card);
@@ -798,6 +958,180 @@ pub(crate) fn handle_item(v: serde_json::Value, l: &mut Live, store: &Store, eve
             }
         }
         _ => {}
+    }
+}
+
+/// What a private payment can spend from: the account's own key and the
+/// tweaks of its notes.
+struct Payer {
+    phrase: String,
+    notes: Vec<[u8; 32]>,
+}
+
+/// Smallest part worth sending: twice what an account must hold to exist.
+const MIN_LEG: u128 = 2 * tao::EXISTENTIAL_RAO;
+
+/// Which sources pay how much: the smallest that covers it all, else the
+/// fewest largest. None if they can't cover it. Every part is at least
+/// MIN_LEG (sources below that are left out by the caller).
+fn plan_legs(spendable: &[u128], total: u128) -> Option<Vec<(usize, u128)>> {
+    let mut idx: Vec<usize> = (0..spendable.len()).collect();
+    if let Some(&i) = idx.iter().filter(|&&i| spendable[i] >= total).min_by_key(|&&i| spendable[i]) {
+        return Some(vec![(i, total)]);
+    }
+    idx.sort_by_key(|&i| std::cmp::Reverse(spendable[i]));
+    let (mut legs, mut left) = (Vec::new(), total);
+    for i in idx.into_iter().take(MAX_LEGS) {
+        let x = spendable[i].min(left);
+        legs.push((i, x));
+        left -= x;
+        if left == 0 {
+            break;
+        }
+    }
+    if left > 0 {
+        return None;
+    }
+    // A sliver for the last part: move some over from the first.
+    let last = legs.len() - 1;
+    if legs[last].1 < MIN_LEG {
+        let d = MIN_LEG - legs[last].1;
+        if legs[0].1 < d + MIN_LEG {
+            return None;
+        }
+        legs[0].1 -= d;
+        legs[last].1 += d;
+    }
+    Some(legs)
+}
+
+/// A random pause before each part, so parts and chat messages don't line
+/// up in time: a few seconds before the first, longer between the rest.
+fn jitter(part: usize) {
+    let secs = if part == 0 { rand::random_range(3..=20) } else { rand::random_range(20..=90) };
+    std::thread::sleep(std::time::Duration::from_secs(secs));
+}
+
+/// Pay privately: plan the parts, then send each from its own address to
+/// its own one-time address of the payee, shielded, after a random pause.
+/// Notes come before the account's own (often public) address.
+fn pay_privately(net: Net, payer: Payer, contact_id: i64, wire_id: String, mut card: PayCard) -> Done {
+    let total = card.amount();
+    let mut legs = Vec::new();
+    let outcome = (|| -> Result<(), String> {
+        let why = |e: crate::Error| tao::reason(&e);
+        let main = stealth::account_key(&payer.phrase).map_err(why)?;
+        let keys = StealthKeys::of(&payer.phrase).map_err(why)?;
+        let fee = tao::fee_reserve(net, &main).map_err(why)?;
+        let mut sources = Vec::new();
+        for kp in payer.notes.iter().map(|t| keys.note_key(*t)).chain([main]) {
+            let left = tao::balance_of(net, &AccountId32(kp.public.to_bytes())).map_err(why)?;
+            let spendable = left.saturating_sub(fee + tao::EXISTENTIAL_RAO);
+            if spendable >= MIN_LEG {
+                sources.push((kp, spendable));
+            }
+        }
+        let amounts: Vec<u128> = sources.iter().map(|(_, x)| *x).collect();
+        let plan = plan_legs(&amounts, total).ok_or("not enough TAO across your addresses for this plus fees")?;
+        let meta = match card.to.starts_with(stealth::META_PREFIX) {
+            true => Some(stealth::Meta::parse(&card.to).map_err(why)?),
+            false => None,
+        };
+        for (part, (i, amount)) in plan.into_iter().enumerate() {
+            jitter(part);
+            let kp = &sources[i].0;
+            let from = AccountId32(kp.public.to_bytes());
+            // Its nonce: unique per payment from this address, so no
+            // one-time address repeats.
+            let k = tao::nonce(net, &from).map_err(why)?;
+            let to = match &meta {
+                Some(m) => m.one_time(kp, k),
+                None => tao::parse_address(&card.to).map_err(why)?,
+            };
+            let (r, shielded) = tao::send_shielded(net, kp, &to, amount).map_err(why)?;
+            if !shielded {
+                card.note = Some("a part went without MEV Shield (its key rotated)".into());
+            }
+            legs.push(Leg {
+                from: tao::address_of(&from),
+                to: tao::address_of(&to),
+                k,
+                rao: amount.to_string(),
+                tx: r.tx,
+                block: r.block,
+            });
+        }
+        Ok(())
+    })();
+    let sent: u128 = legs.iter().map(|l| l.rao.parse::<u128>().unwrap_or(0)).sum();
+    if let Some(first) = legs.first() {
+        card.tx = Some(first.tx.clone());
+        card.block = Some(first.block.clone());
+    }
+    card.legs = legs;
+    match outcome {
+        Ok(()) => card.status = PayStatus::Sent,
+        Err(why) if sent > 0 => {
+            card.status = PayStatus::Failed;
+            card.note = Some(format!("only {} of {} went through: {why}", tao::format_tao(sent), tao::format_tao(total)));
+            card.rao = sent.to_string(); // what they can verify
+        }
+        Err(why) => {
+            card.status = PayStatus::Failed;
+            card.note = Some(why);
+        }
+    }
+    let tell_peer = !card.legs.is_empty();
+    Done::Card { contact_id, wire_id, card, tell_peer }
+}
+
+/// Check a private payment to us: every part must go to a one-time address
+/// we derive ourselves (never trusting the card) and be on chain as
+/// claimed. Its notes are kept only if all of it checks out.
+fn check_private(contact_id: i64, wire_id: String, mut card: PayCard, accounts: Vec<(String, Option<String>)>) -> Done {
+    let mut notes = Vec::new();
+    let ok = (|| {
+        let owner = match card.to.starts_with(stealth::META_PREFIX) {
+            true => Some(accounts.iter().find_map(|(a, phrase)| {
+                let keys = StealthKeys::of(phrase.as_deref()?).ok()?;
+                (keys.meta().encode() == card.to).then(|| (a.clone(), keys))
+            })?),
+            false => None,
+        };
+        for leg in &card.legs {
+            let (from, to) = (tao::parse_address(&leg.from).ok()?, tao::parse_address(&leg.to).ok()?);
+            match &owner {
+                Some((acc, keys)) => {
+                    let tweak = keys.claim(&from, leg.k, &to)?;
+                    notes.push((acc.clone(), leg.to.clone(), tao::hex(&tweak)));
+                }
+                None if accounts.iter().any(|(a, _)| *a == leg.to) => {}
+                None => return None,
+            }
+            let r = Receipt { tx: leg.tx.clone(), block: leg.block.clone() };
+            if !tao::verify(card.net, &r, &leg.from, &leg.to, leg.rao.parse().ok()?).unwrap_or(false) {
+                return None;
+            }
+        }
+        Some(())
+    })()
+    .is_some();
+    card.status = if ok { PayStatus::Verified } else { PayStatus::Unverified };
+    if !ok {
+        notes.clear();
+    }
+    Done::Received { contact_id, wire_id, card, notes }
+}
+
+/// A payment that landed settles the request it answers.
+fn settle_request(store: &Store, events: &Sender<Event>, contact_id: i64, card: &PayCard) {
+    if let (Some(re), PayStatus::Sent | PayStatus::Verified) = (card.re.as_deref(), card.status) {
+        if let Some(mut req) = card_of(store, contact_id, re).filter(|r| r.kind == PayKind::Request) {
+            req.status = PayStatus::Settled;
+            req.tx = card.tx.clone();
+            req.block = card.block.clone();
+            update_card(store, events, contact_id, re, &req);
+        }
     }
 }
 
@@ -844,6 +1178,11 @@ fn check_cheque(contact_id: i64, wire_id: String, mut card: PayCard, mine: Vec<S
 /// paid our request). Check it on chain before showing it.
 fn settle_update(store: &Store, jobs: &Jobs, cid: i64, id: String, theirs: PayCard) {
     let Some(mut ours) = card_of(store, cid, &id) else { return };
+    // A private payment settling our request: its own card carries the
+    // parts, and arrives (and is checked) as a payment.
+    if !theirs.legs.is_empty() {
+        return;
+    }
     let (Some(tx), Some(block)) = (theirs.tx.clone(), theirs.block.clone()) else { return };
     let (net, from, to, rao) = (ours.net, ours.from.clone(), ours.to.clone(), ours.amount());
     jobs.spawn(move || {
@@ -892,13 +1231,20 @@ pub(crate) fn drain(store: &Store, live: &mut [Live], events: &Sender<Event>, jo
                 }
                 // A landed payment settles the request it answers: ours once
                 // we sent it, theirs once we verified it on chain.
-                if let (Some(re), PayStatus::Sent | PayStatus::Verified) = (card.re.as_deref(), card.status) {
-                    if let Some(mut req) = card_of(store, contact_id, re).filter(|r| r.kind == PayKind::Request) {
-                        req.status = PayStatus::Settled;
-                        req.tx = card.tx.clone();
-                        req.block = card.block.clone();
-                        update_card(store, events, contact_id, re, &req);
+                settle_request(store, events, contact_id, &card);
+            }
+            Done::Received { contact_id, wire_id, card, notes } => {
+                update_card(store, events, contact_id, &wire_id, &card);
+                settle_request(store, events, contact_id, &card);
+                if !notes.is_empty() {
+                    let mut w = Wallet::load(store);
+                    for (owner, address, tweak) in notes {
+                        if !w.notes.iter().any(|n| n.address == address) {
+                            w.notes.push(Note { owner, address, tweak });
+                        }
                     }
+                    w.save(store);
+                    handle_cmd(TaoCmd::Refresh, store, live, events, jobs);
                 }
             }
             Done::MailboxOpened { phrase, address, token } => {
@@ -962,6 +1308,36 @@ pub(crate) fn drain(store: &Store, live: &mut [Live], events: &Sender<Event>, jo
 #[cfg(test)]
 mod tests {
     #[test]
+    fn plan_prefers_one_part_then_fewest_largest() {
+        let m = super::MIN_LEG;
+        // The smallest single source that covers it.
+        assert_eq!(super::plan_legs(&[50 * m, 9 * m, 10 * m], 8 * m), Some(vec![(1, 8 * m)]));
+        // Else the largest first, fewest parts.
+        assert_eq!(super::plan_legs(&[3 * m, 5 * m, 4 * m], 8 * m), Some(vec![(1, 5 * m), (2, 3 * m)]));
+        assert_eq!(super::plan_legs(&[3 * m, 4 * m], 8 * m), None);
+        // A sliver of a last part is topped up from the first.
+        let plan = super::plan_legs(&[5 * m, 5 * m], 10 * m - m / 2).unwrap();
+        assert!(plan.iter().all(|&(_, x)| x >= m));
+        assert_eq!(plan.iter().map(|&(_, x)| x).sum::<u128>(), 10 * m - m / 2);
+    }
+
+    #[test]
+    fn private_cards_must_add_up() {
+        let mut c = card();
+        c.kind = PayKind::Paid;
+        c.to = crate::stealth::StealthKeys::of("bottom drive obey lake curtain smoke basket hold race lonely fit walk")
+            .unwrap()
+            .meta()
+            .encode();
+        let leg = |rao: &str| Leg { from: c.from.clone(), to: c.from.clone(), k: 0, rao: rao.into(), tx: "0x".into(), block: "0x".into() };
+        c.legs = vec![leg("1000000000"), leg("500000000")];
+        c.rao = "1500000000".into();
+        assert!(c.validate().is_ok(), "{:?}", c.validate());
+        c.rao = "2000000000".into();
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
     fn fund_amount_clears_the_minimum() {
         // $20 + 3% at $250/TAO = 0.0824 TAO.
         assert_eq!(super::fund_rao(250.0), 82_400_000);
@@ -985,6 +1361,7 @@ mod tests {
             memo: None,
             re: None,
             note: None,
+            legs: Vec::new(),
         }
     }
 

@@ -230,6 +230,10 @@ pub struct Settings {
     /// Send read receipts, and show the peer's. Reciprocal; off by default.
     #[serde(default)]
     pub read_receipts: bool,
+    /// Private payments: stealth addresses, notes, split payments, MEV
+    /// Shield and send jitter. Off by default.
+    #[serde(default)]
+    pub private_payments: bool,
     /// TAO network for the wallet: "main" or "test".
     #[serde(default = "default_tao_net")]
     pub tao_net: String,
@@ -276,6 +280,7 @@ impl Default for Settings {
             typing_indicators: false,
             disappear_secs: 0,
             read_receipts: false,
+            private_payments: false,
             tao_net: default_tao_net(),
             hippius_api_token: None,
             dev_keyfile: false,
