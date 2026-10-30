@@ -612,6 +612,57 @@ pub(crate) struct Live {
     pub(crate) session: ContactSession,
     /// (wire_id, object key, seen-once, put at) for delivery receipts.
     pending: Vec<(String, String, bool, std::time::Instant)>,
+    pace: Pace,
+}
+
+/// Fastest inbox check: every worker pass.
+const POLL: std::time::Duration = std::time::Duration::from_millis(1500);
+/// Slowest, for a conversation that has gone quiet.
+const MAX_IDLE: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// When to next LIST a conversation's inbox. After activity (something in
+/// or out, or the chat opened) every pass for HOT, since replies follow;
+/// then each empty look waits half again as long, up to MAX_IDLE. Quiet
+/// chats cost a fraction of the requests, and a new message still shows
+/// within MAX_IDLE while the app is open.
+#[derive(Clone, Copy)]
+pub(crate) struct Pace {
+    next: std::time::Instant,
+    gap: std::time::Duration,
+    hot_until: std::time::Instant,
+}
+
+/// How long a conversation stays at full speed after activity.
+const HOT: std::time::Duration = std::time::Duration::from_secs(60);
+
+impl Pace {
+    fn new() -> Self {
+        let now = std::time::Instant::now();
+        Self { next: now, gap: POLL, hot_until: now + HOT }
+    }
+
+    fn due(&self) -> bool {
+        std::time::Instant::now() >= self.next
+    }
+
+    /// Activity: look now, and keep looking every pass for a while.
+    fn wake(&mut self) {
+        let now = std::time::Instant::now();
+        (self.gap, self.next, self.hot_until) = (POLL, now, now + HOT);
+    }
+
+    /// After a look: activity if it found something, else back off once
+    /// the conversation has cooled.
+    fn after(&mut self, found: bool) {
+        if found {
+            return self.wake();
+        }
+        let now = std::time::Instant::now();
+        if now >= self.hot_until {
+            self.gap = (self.gap * 3 / 2).min(MAX_IDLE);
+        }
+        self.next = now + self.gap;
+    }
 }
 
 /// One worker at a time: after a wipe the next one waits here until the
@@ -712,7 +763,7 @@ pub fn spawn_worker(
                             (w, key, false, long_ago)
                         })
                         .collect();
-                    live.push(Live { contact: c, session, pending })
+                    live.push(Live { contact: c, session, pending, pace: Pace::new() })
                 }
                 Err(e) => {
                     let _ = events.send(err(format!("{}: {e}", c.name)));
@@ -740,8 +791,12 @@ pub fn spawn_worker(
                 if crate::stale() {
                     return;
                 }
-                for item in l.session.poll() {
-                    handle_item(item, l, &store, &me, &events, &jobs);
+                if l.pace.due() {
+                    let items = l.session.poll();
+                    l.pace.after(!items.is_empty());
+                    for item in items {
+                        handle_item(item, l, &store, &me, &events, &jobs);
+                    }
                 }
                 l.session.flush_outbox();
                 persist_session(&store, l);
@@ -768,7 +823,11 @@ pub fn spawn_worker(
                     return;
                 }
                 let gid = -gl.group.id;
+                if !gl.pace.due() {
+                    continue;
+                }
                 let items = gl.poll();
+                gl.pace.after(!items.is_empty());
                 for item in items {
                     match item {
                         GroupItem::NewPeer { seat, pk } => {
@@ -822,6 +881,15 @@ pub fn spawn_worker(
             while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
                 match outbound.recv_timeout(left) {
                     Ok(cmd) => {
+                        // Sending, reacting, opening a chat: replies tend to
+                        // follow, so watch that inbox closely again.
+                        match cmd_contact_id(&cmd) {
+                            Some(id) if id < 0 => {
+                                groups.iter_mut().filter(|g| g.group.id == -id).for_each(|g| g.pace.wake())
+                            }
+                            Some(id) => live.iter_mut().filter(|l| l.contact.id == id).for_each(|l| l.pace.wake()),
+                            None => {}
+                        }
                         match cmd {
                             Cmd::Tao(t) => crate::wallet::handle_cmd(t, &store, &mut live, &events, &mut jobs),
                             cmd => handle_cmd(cmd, &store, &me, &mut live, &mut groups, &events, &jobs),
@@ -949,7 +1017,7 @@ fn handle_cmd(
                 Ok((mut contact, _link, session)) => match store.add_contact(&contact) {
                     Ok(id) => {
                         contact.id = id;
-                        live.push(Live { contact: contact.clone(), session, pending: Vec::new() });
+                        live.push(Live { contact: contact.clone(), session, pending: Vec::new(), pace: Pace::new() });
                         let _ = events.send(Event::ContactAdded(contact));
                     }
                     Err(e) => send_err(e.to_string()),
@@ -1018,7 +1086,7 @@ fn handle_cmd(
             Ok((contact, session)) => match store.add_contact(&contact) {
                 Ok(id) => {
                     let contact = with_safety(Contact { id, ..contact }, me);
-                    live.push(Live { contact: contact.clone(), session, pending: Vec::new() });
+                    live.push(Live { contact: contact.clone(), session, pending: Vec::new(), pace: Pace::new() });
                     let _ = events.send(Event::ContactAdded(contact));
                 }
                 Err(e) => send_err(e.to_string()),
@@ -1206,7 +1274,12 @@ fn handle_cmd(
 }
 
 fn cmd_group_id(cmd: &Cmd) -> Option<i64> {
-    let id = match cmd {
+    cmd_contact_id(cmd).filter(|id| *id < 0).map(|id| -id)
+}
+
+/// The chat a command is about (groups are negative).
+fn cmd_contact_id(cmd: &Cmd) -> Option<i64> {
+    Some(match cmd {
         Cmd::Rename { contact_id, .. }
         | Cmd::Send { contact_id, .. }
         | Cmd::SendFile { contact_id, .. }
@@ -1218,8 +1291,7 @@ fn cmd_group_id(cmd: &Cmd) -> Option<i64> {
         | Cmd::DeleteContact { contact_id }
         | Cmd::ClearHistory { contact_id, .. } => *contact_id,
         _ => return None,
-    };
-    (id < 0).then_some(-id)
+    })
 }
 
 fn handle_group_cmd(
@@ -1562,6 +1634,7 @@ pub struct GroupLive {
     /// (from-seat, inbox) and (to-seat, outbox) mailboxes.
     boxes_in: Vec<(i64, Mailbox)>,
     boxes_out: Vec<(i64, Mailbox)>,
+    pace: Pace,
 }
 
 pub enum GroupItem {
@@ -1600,7 +1673,7 @@ impl GroupLive {
                     .map_err(|e| e.to_string())?,
             ));
         }
-        Ok(Self { group: g.clone(), me_secret: me.to_b64(), peers, boxes_in, boxes_out })
+        Ok(Self { group: g.clone(), me_secret: me.to_b64(), peers, boxes_in, boxes_out, pace: Pace::new() })
     }
 
     fn me(&self) -> Identity {
@@ -1701,6 +1774,23 @@ impl GroupLive {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn quiet_inboxes_back_off_and_wake_on_activity() {
+        let mut p = super::Pace::new();
+        p.hot_until = std::time::Instant::now(); // cooled
+        for _ in 0..20 {
+            p.after(false);
+        }
+        assert_eq!(p.gap, super::MAX_IDLE);
+        assert!(!p.due());
+        p.after(true);
+        assert_eq!(p.gap, super::POLL);
+        assert!(p.due());
+        // While hot, empty looks don't slow it down.
+        p.after(false);
+        assert_eq!(p.gap, super::POLL);
+    }
+
     use super::*;
 
     #[test]
